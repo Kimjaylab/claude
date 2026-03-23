@@ -190,10 +190,14 @@ def convert_xio(xio_path: Path, dest_dir: Path, log):
         return 0
 
     # NTP 절대시각 → 녹화 시작 기준 상대시각으로 정규화
-    t0 = min(m["time"] for msgs in by_address.values() for m in msgs)
-    for msgs in by_address.values():
-        for m in msgs:
-            m["time"] -= t0
+    # (time=0 인 비번들 패킷은 제외하고 최솟값 계산)
+    valid_times = [m["time"] for msgs in by_address.values() for m in msgs if m["time"] > 0]
+    t0 = min(valid_times) if valid_times else 0.0
+    if t0 > 0:
+        for msgs in by_address.values():
+            for m in msgs:
+                if m["time"] > 0:
+                    m["time"] -= t0
     log(f"  시작 시각 기준 정규화 완료 (t0 = {t0:.2f}s)")
 
     # GPS 확인
