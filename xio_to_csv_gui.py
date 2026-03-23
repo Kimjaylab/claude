@@ -1,179 +1,241 @@
 #!/usr/bin/env python3
 """
 NGIMU XIO to CSV Converter - GUI
+XIO 파일 포맷: SLIP 프레임 안에 OSC 번들/메시지가 담긴 바이너리
 """
 
 import csv
-import io
+import struct
 import os
 import sys
-import zipfile
 import threading
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from pathlib import Path
+from collections import defaultdict
 from datetime import timedelta
 
 
 # ─────────────────────────────────────────────
-# 변환 로직 (기존 xio_to_csv.py 와 동일)
+# SLIP 디코더
 # ─────────────────────────────────────────────
 
-def seconds_to_hhmmss(value: str) -> str:
+SLIP_END     = 0xC0
+SLIP_ESC     = 0xDB
+SLIP_ESC_END = 0xDC
+SLIP_ESC_ESC = 0xDD
+
+
+def slip_decode(data: bytes) -> list:
+    """SLIP 바이너리에서 패킷 목록 추출."""
+    packets = []
+    current = bytearray()
+    i = 0
+    while i < len(data):
+        b = data[i]
+        if b == SLIP_END:
+            if current:
+                packets.append(bytes(current))
+                current = bytearray()
+        elif b == SLIP_ESC:
+            i += 1
+            if i < len(data):
+                nb = data[i]
+                if nb == SLIP_ESC_END:
+                    current.append(SLIP_END)
+                elif nb == SLIP_ESC_ESC:
+                    current.append(SLIP_ESC)
+                else:
+                    current.append(nb)
+        else:
+            current.append(b)
+        i += 1
+    if current:
+        packets.append(bytes(current))
+    return packets
+
+
+# ─────────────────────────────────────────────
+# OSC 파서
+# ─────────────────────────────────────────────
+
+def _osc_str(data: bytes, offset: int):
+    """OSC 문자열 (null 종료, 4바이트 정렬) 읽기."""
+    end = data.index(0, offset)
+    s = data[offset:end].decode("ascii", errors="replace")
+    padded = (end + 4) & ~3
+    return s, padded
+
+
+def _osc_timetag(data: bytes, offset: int):
+    """OSC 타임태그 (64비트 고정소수점) → float 초."""
+    sec, frac = struct.unpack_from(">II", data, offset)
+    return sec + frac / 2**32, offset + 8
+
+
+def _parse_message(data: bytes, time: float):
+    """OSC 메시지 파싱 → {'address', 'time', 'args'}"""
     try:
-        seconds = float(value)
-    except (ValueError, TypeError):
-        return value
-    td = timedelta(seconds=abs(seconds))
+        address, offset = _osc_str(data, 0)
+        if not address.startswith("/"):
+            return None
+
+        args = []
+        if offset < len(data) and data[offset:offset + 1] == b",":
+            type_str, offset = _osc_str(data, offset)
+            for t in type_str[1:]:
+                if t == "f":
+                    args.append(struct.unpack_from(">f", data, offset)[0])
+                    offset += 4
+                elif t == "i":
+                    args.append(struct.unpack_from(">i", data, offset)[0])
+                    offset += 4
+                elif t == "d":
+                    args.append(struct.unpack_from(">d", data, offset)[0])
+                    offset += 8
+                elif t == "s":
+                    val, offset = _osc_str(data, offset)
+                    args.append(val)
+                elif t == "t":
+                    val, offset = _osc_timetag(data, offset)
+                    args.append(val)
+                elif t in ("T", "F"):
+                    args.append(t == "T")
+        return {"address": address, "time": time, "args": args}
+    except Exception:
+        return None
+
+
+def parse_osc_packet(data: bytes, parent_time: float = 0.0) -> list:
+    """OSC 번들 또는 메시지에서 메시지 목록 반환."""
+    messages = []
+    if data[:8] == b"#bundle\x00":
+        try:
+            time, offset = _osc_timetag(data, 8)
+            while offset + 4 <= len(data):
+                size = struct.unpack_from(">I", data, offset)[0]
+                offset += 4
+                if size == 0 or offset + size > len(data):
+                    break
+                messages.extend(parse_osc_packet(data[offset:offset + size], time))
+                offset += size
+        except Exception:
+            pass
+    else:
+        msg = _parse_message(data, parent_time)
+        if msg:
+            messages.append(msg)
+    return messages
+
+
+# ─────────────────────────────────────────────
+# 알려진 NGIMU OSC 주소 → 컬럼 헤더
+# ─────────────────────────────────────────────
+
+OSC_HEADERS = {
+    "/battery":    ["Charge (%)", "Voltage (V)", "Current (mA)", "Temperature (°C)"],
+    "/temperature":["Temperature (°C)"],
+    "/humidity":   ["Humidity (%)"],
+    "/barometer":  ["Pressure (hPa)"],
+    "/magnetics":  ["Mag X (uT)", "Mag Y (uT)", "Mag Z (uT)"],
+    "/inertial":   ["Gyro X (deg/s)", "Gyro Y (deg/s)", "Gyro Z (deg/s)",
+                    "Accel X (g)",   "Accel Y (g)",    "Accel Z (g)"],
+    "/sensors":    ["Gyro X (deg/s)", "Gyro Y (deg/s)", "Gyro Z (deg/s)",
+                    "Accel X (g)",   "Accel Y (g)",    "Accel Z (g)",
+                    "Mag X (uT)",    "Mag Y (uT)",     "Mag Z (uT)"],
+    "/quaternion": ["W", "X", "Y", "Z"],
+    "/euler":      ["Roll (deg)", "Pitch (deg)", "Yaw (deg)"],
+    "/linear":     ["Linear Accel X (g)", "Linear Accel Y (g)", "Linear Accel Z (g)"],
+    "/earth":      ["Earth Accel X (g)",  "Earth Accel Y (g)",  "Earth Accel Z (g)"],
+    "/altitude":   ["Altitude (m)"],
+    "/analogue":   [f"Analogue {i}" for i in range(1, 9)],
+    "/rssi":       ["RSSI (dBm)"],
+}
+
+
+def seconds_to_hhmmss(t: float) -> str:
+    td = timedelta(seconds=abs(t))
     total_s = int(td.total_seconds())
-    h = total_s // 3600
-    m = (total_s % 3600) // 60
-    s = total_s % 60
-    ms = round((seconds - int(seconds)) * 1000)
-    ms = max(ms, 0)
-    sign = "-" if seconds < 0 else ""
+    h  = total_s // 3600
+    m  = (total_s % 3600) // 60
+    s  = total_s % 60
+    ms = round((abs(t) - int(abs(t))) * 1000)
+    sign = "-" if t < 0 else ""
     return f"{sign}{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
 
 
-def _parse_csv_text(text: str):
-    reader = csv.reader(io.StringIO(text))
-    rows = [r for r in reader if any(cell.strip() for cell in r)]
-    if not rows:
-        return [], []
-    return rows[0], rows[1:]
+# ─────────────────────────────────────────────
+# 변환 로직
+# ─────────────────────────────────────────────
 
+def convert_xio(xio_path: Path, dest_dir: Path, log):
+    """XIO 바이너리 파일 → 타입별 CSV."""
+    raw = xio_path.read_bytes()
+    log(f"  파일 크기: {len(raw):,} bytes")
 
-def read_csv_file(filepath: Path):
-    for enc in ("utf-8-sig", "utf-8", "cp949", "latin-1"):
-        try:
-            text = filepath.read_text(encoding=enc)
-            headers, rows = _parse_csv_text(text)
-            if headers:
-                return headers, rows
-        except UnicodeDecodeError:
-            continue
-    return [], []
+    packets = slip_decode(raw)
+    log(f"  SLIP 패킷 수: {len(packets):,}")
 
+    # 메시지 분류
+    by_address = defaultdict(list)
+    for pkt in packets:
+        for msg in parse_osc_packet(pkt):
+            by_address[msg["address"]].append(msg)
 
-def read_csv_from_zip(zf: zipfile.ZipFile, name: str):
-    raw = zf.read(name)
-    for enc in ("utf-8-sig", "utf-8", "cp949", "latin-1"):
-        try:
-            text = raw.decode(enc)
-            headers, rows = _parse_csv_text(text)
-            if headers:
-                return headers, rows
-        except UnicodeDecodeError:
-            continue
-    return [], []
+    if not by_address:
+        log("  [경고] 파싱된 데이터가 없습니다.")
+        return 0
 
+    log(f"  발견된 데이터 타입: {', '.join(sorted(by_address.keys()))}")
 
-def collect_from_zip(xio_path: Path, log):
-    data = {}
-    with zipfile.ZipFile(xio_path, "r") as zf:
-        csv_entries = sorted(
-            n for n in zf.namelist()
-            if n.lower().endswith(".csv") and not os.path.basename(n).startswith(".")
-        )
-        if not csv_entries:
-            log(f"  [경고] {xio_path.name} 안에 CSV 파일이 없습니다.")
-            return data
-        for entry in csv_entries:
-            data_name = Path(entry).stem
-            headers, rows = read_csv_from_zip(zf, entry)
-            if headers and rows:
-                data[data_name] = {"headers": headers, "rows": rows}
-                log(f"  [OK] {entry} → {len(rows)}행")
-    return data
+    # 타입별 CSV 저장
+    written = 0
+    for address, messages in sorted(by_address.items()):
+        safe_name = address.strip("/").replace("/", "_") or "root"
+        out_path = dest_dir / f"{xio_path.stem}_{safe_name}.csv"
 
+        # 컬럼 헤더 결정
+        known = OSC_HEADERS.get(address)
+        max_args = max((len(m["args"]) for m in messages), default=0)
+        if known and len(known) >= max_args:
+            value_headers = known[:max_args]
+        else:
+            value_headers = [f"Value_{i+1}" for i in range(max_args)]
 
-def collect_from_directory(dir_path: Path, log):
-    data = {}
-    csv_files = sorted(dir_path.glob("*.csv"))
-    for csv_file in csv_files:
-        data_name = csv_file.stem
-        headers, rows = read_csv_file(csv_file)
-        if headers and rows:
-            data[data_name] = {"headers": headers, "rows": rows}
-            log(f"  [OK] {csv_file.name} → {len(rows)}행")
-    return data
+        with open(out_path, "w", newline="", encoding="utf-8-sig") as f:
+            writer = csv.writer(f)
+            writer.writerow(["Time (s)", "Time (HH:MM:SS.mmm)"] + value_headers)
+            for msg in messages:
+                t = msg["time"]
+                row = [f"{t:.6f}", seconds_to_hhmmss(t)]
+                row += [str(a) for a in msg["args"]]
+                writer.writerow(row)
 
+        log(f"  ✓ {out_path.name}  ({len(messages):,}행)")
+        written += 1
 
-def write_unified_csv(all_data: dict, output_path: Path):
-    all_columns = []
-    col_index = {}
-    for data_name, data in all_data.items():
-        for h in data["headers"][1:]:
-            key = (data_name, h.strip())
-            if key not in col_index:
-                col_index[key] = len(all_columns)
-                all_columns.append(key)
-
-    total_cols = 2 + len(all_columns)
-    header_row = ["Data Name", "Time"] + [
-        f"{name} - {col}" for name, col in all_columns
-    ]
-
-    with open(output_path, "w", newline="", encoding="utf-8-sig") as f:
-        writer = csv.writer(f)
-        writer.writerow(header_row)
-        total_rows = 0
-        for data_name, data in all_data.items():
-            headers = data["headers"]
-            local_to_global = []
-            for h in headers[1:]:
-                key = (data_name, h.strip())
-                local_to_global.append(2 + col_index[key])
-
-            for row in data["rows"]:
-                if not row:
-                    continue
-                time_str = seconds_to_hhmmss(row[0]) if row else ""
-                out_row = [""] * total_cols
-                out_row[0] = data_name
-                out_row[1] = time_str
-                for local_i, global_i in enumerate(local_to_global):
-                    src_i = local_i + 1
-                    if src_i < len(row):
-                        out_row[global_i] = row[src_i]
-                writer.writerow(out_row)
-                total_rows += 1
-    return total_rows
+    return written
 
 
 def run_conversion(input_paths: list, dest_dir: Path, log, on_done):
-    """여러 XIO 파일 또는 폴더를 변환."""
     try:
-        total_files = 0
-        for inp in input_paths:
-            inp = Path(inp)
-            log(f"\n▶ {inp.name} 처리 중...")
-
-            if inp.is_file() and inp.suffix.lower() == ".xio":
-                try:
-                    all_data = collect_from_zip(inp, log)
-                except zipfile.BadZipFile:
-                    log(f"  [오류] zip 형식이 아닙니다. NGIMU 소프트웨어로 먼저 CSV 변환 후 폴더를 선택하세요.")
-                    continue
-            elif inp.is_dir():
-                all_data = collect_from_directory(inp, log)
-            else:
-                log(f"  [오류] 지원하지 않는 형식: {inp.suffix}")
+        total = 0
+        for p in input_paths:
+            p = Path(p)
+            log(f"\n▶ {p.name} 처리 중...")
+            if not p.is_file():
+                log("  [오류] 파일이 아닙니다.")
                 continue
-
-            if not all_data:
-                log("  [경고] 변환할 데이터가 없습니다.")
+            if p.suffix.upper() != ".XIO":
+                log(f"  [오류] .XIO 파일이 아닙니다: {p.suffix}")
                 continue
-
-            out_path = dest_dir / (inp.stem + "_unified.csv")
-            log(f"\n  CSV 생성 중 → {out_path.name}")
-            total_rows = write_unified_csv(all_data, out_path)
-            log(f"  ✓ 완료 | {total_rows:,}행 | 데이터: {', '.join(all_data.keys())}")
-            total_files += 1
-
-        on_done(total_files)
+            n = convert_xio(p, dest_dir, log)
+            total += n
+        on_done(total)
     except Exception as e:
         log(f"\n[오류] {e}")
+        import traceback
+        log(traceback.format_exc())
         on_done(0)
 
 
@@ -181,126 +243,108 @@ def run_conversion(input_paths: list, dest_dir: Path, log, on_done):
 # GUI
 # ─────────────────────────────────────────────
 
+PLACEHOLDER = "Select SD card file(s)"
+
+
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("NGIMU XIO to CSV Converter v1.0")
+        self.title("NGIMU XIO to CSV Converter v2.0")
         self.resizable(False, False)
+        self._input_paths = []
         self._build_ui()
-        self._center_window()
+        self._center()
 
-    def _center_window(self):
+    def _center(self):
         self.update_idletasks()
         w, h = self.winfo_width(), self.winfo_height()
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
-        self.geometry(f"+{(sw - w) // 2}+{(sh - h) // 2}")
+        self.geometry(f"+{(sw-w)//2}+{(sh-h)//2}")
 
     def _build_ui(self):
-        PAD = {"padx": 8, "pady": 4}
+        P = {"padx": 8, "pady": 4}
 
-        # ── 입력 파일 행 ──────────────────────────
-        tk.Label(self, text="SD Card File(s):").grid(
-            row=0, column=0, sticky="e", **PAD)
-
-        self.files_var = tk.StringVar(value="")
+        # SD Card File(s)
+        tk.Label(self, text="SD Card File(s):").grid(row=0, column=0, sticky="e", **P)
+        self.files_var = tk.StringVar()
         self.files_entry = tk.Entry(
-            self, textvariable=self.files_var, width=52,
-            fg="grey", relief="flat", highlightthickness=1,
-            highlightbackground="#aaa", highlightcolor="#0078d4")
-        self.files_entry.insert(0, "Select SD card file(s)")
-        self.files_entry.bind("<FocusIn>", self._clear_placeholder)
-        self.files_entry.grid(row=0, column=1, sticky="ew", **PAD)
-
-        tk.Button(self, text="...", width=3,
-                  command=self._browse_files).grid(row=0, column=2, **PAD)
-
-        # ── 출력 폴더 행 ──────────────────────────
-        tk.Label(self, text="Destination Directory:").grid(
-            row=1, column=0, sticky="e", **PAD)
-
-        self.dest_var = tk.StringVar(value=str(Path.home() / "Desktop"))
-        self.dest_entry = tk.Entry(
-            self, textvariable=self.dest_var, width=52,
+            self, textvariable=self.files_var, width=52, fg="grey",
             relief="flat", highlightthickness=1,
             highlightbackground="#aaa", highlightcolor="#0078d4")
-        self.dest_entry.grid(row=1, column=1, sticky="ew", **PAD)
+        self.files_entry.insert(0, PLACEHOLDER)
+        self.files_entry.bind("<FocusIn>", self._clear_ph)
+        self.files_entry.grid(row=0, column=1, sticky="ew", **P)
+        tk.Button(self, text="...", width=3, command=self._browse_files).grid(row=0, column=2, **P)
 
-        tk.Button(self, text="...", width=3,
-                  command=self._browse_dest).grid(row=1, column=2, **PAD)
+        # Destination Directory
+        tk.Label(self, text="Destination Directory:").grid(row=1, column=0, sticky="e", **P)
+        self.dest_var = tk.StringVar(value=str(Path.home() / "Desktop"))
+        tk.Entry(
+            self, textvariable=self.dest_var, width=52,
+            relief="flat", highlightthickness=1,
+            highlightbackground="#aaa", highlightcolor="#0078d4"
+        ).grid(row=1, column=1, sticky="ew", **P)
+        tk.Button(self, text="...", width=3, command=self._browse_dest).grid(row=1, column=2, **P)
 
-        # ── Convert 버튼 ──────────────────────────
+        # Convert 버튼
         btn_frame = tk.Frame(self)
         btn_frame.grid(row=2, column=0, columnspan=3, sticky="e", padx=8, pady=4)
-        self.convert_btn = tk.Button(
-            btn_frame, text="Convert", width=10,
-            command=self._start_convert)
+        self.convert_btn = tk.Button(btn_frame, text="Convert", width=10, command=self._start)
         self.convert_btn.pack()
 
-        # ── 로그 창 (초기엔 숨김) ─────────────────
+        # 로그창
         self.log_frame = tk.Frame(self)
-        self.log_frame.grid(row=3, column=0, columnspan=3,
-                            sticky="nsew", padx=8, pady=(0, 8))
+        self.log_frame.grid(row=3, column=0, columnspan=3, sticky="nsew", padx=8, pady=(0, 4))
         self.log_frame.grid_remove()
-
         self.log_text = tk.Text(
-            self.log_frame, width=70, height=12,
-            state="disabled", relief="flat", bg="#1e1e1e", fg="#d4d4d4",
+            self.log_frame, width=70, height=14, state="disabled",
+            relief="flat", bg="#1e1e1e", fg="#d4d4d4",
             font=("Consolas", 9), wrap="word")
         self.log_text.pack(side="left", fill="both", expand=True)
-
         sb = tk.Scrollbar(self.log_frame, command=self.log_text.yview)
         sb.pack(side="right", fill="y")
         self.log_text.config(yscrollcommand=sb.set)
 
-        # ── 진행 바 (초기엔 숨김) ────────────────
+        # 진행바
         self.progress = ttk.Progressbar(self, mode="indeterminate", length=480)
-        self.progress.grid(row=4, column=0, columnspan=3,
-                           padx=8, pady=(0, 8), sticky="ew")
+        self.progress.grid(row=4, column=0, columnspan=3, padx=8, pady=(0, 8), sticky="ew")
         self.progress.grid_remove()
 
-        self._input_paths = []
-
-    # ── 이벤트 핸들러 ──────────────────────────────
-
-    def _clear_placeholder(self, event):
-        if self.files_entry.get() == "Select SD card file(s)":
+    def _clear_ph(self, _):
+        if self.files_entry.get() == PLACEHOLDER:
             self.files_entry.delete(0, "end")
             self.files_entry.config(fg="black")
 
     def _browse_files(self):
         paths = filedialog.askopenfilenames(
-            title="SD Card File(s) 선택",
-            filetypes=[("XIO files", "*.xio"), ("All files", "*.*")])
+            title="XIO 파일 선택",
+            filetypes=[("XIO files", "*.xio *.XIO"), ("All files", "*.*")])
         if paths:
             self._input_paths = list(paths)
-            display = "; ".join(Path(p).name for p in paths)
             self.files_entry.config(fg="black")
-            self.files_var.set(display)
+            self.files_var.set("; ".join(Path(p).name for p in paths))
 
     def _browse_dest(self):
-        path = filedialog.askdirectory(title="Destination Directory 선택")
-        if path:
-            self.dest_var.set(path)
+        p = filedialog.askdirectory(title="출력 폴더 선택")
+        if p:
+            self.dest_var.set(p)
 
     def _log(self, msg: str):
-        """로그 창에 텍스트 추가 (스레드 안전)."""
-        def _append():
+        def _do():
             self.log_text.config(state="normal")
             self.log_text.insert("end", msg + "\n")
             self.log_text.see("end")
             self.log_text.config(state="disabled")
-        self.after(0, _append)
+        self.after(0, _do)
 
-    def _start_convert(self):
-        # 입력 검증
-        paths = self._input_paths
+    def _start(self):
+        paths = self._input_paths or []
         if not paths:
             raw = self.files_var.get().strip()
-            if raw and raw != "Select SD card file(s)":
+            if raw and raw != PLACEHOLDER:
                 paths = [p.strip() for p in raw.split(";") if p.strip()]
-
         if not paths:
-            messagebox.showwarning("입력 없음", "SD Card File(s)을 선택하세요.")
+            messagebox.showwarning("입력 없음", "XIO 파일을 선택하세요.")
             return
 
         dest = self.dest_var.get().strip()
@@ -311,32 +355,30 @@ class App(tk.Tk):
         dest_path = Path(dest)
         dest_path.mkdir(parents=True, exist_ok=True)
 
-        # UI 상태 변경
         self.convert_btn.config(state="disabled")
         self.log_frame.grid()
         self.progress.grid()
         self.progress.start(10)
 
-        # 로그 초기화
         self.log_text.config(state="normal")
         self.log_text.delete("1.0", "end")
         self.log_text.config(state="disabled")
 
         self._log(f"변환 시작 | 파일 수: {len(paths)}")
-        self._log(f"출력 경로: {dest_path}\n")
+        self._log(f"출력 경로: {dest_path}")
 
-        def on_done(total_files):
+        def on_done(total):
             def _finish():
                 self.progress.stop()
                 self.progress.grid_remove()
                 self.convert_btn.config(state="normal")
-                if total_files > 0:
-                    self._log(f"\n모든 변환 완료 ({total_files}개 파일)")
-                    messagebox.showinfo(
-                        "완료",
-                        f"{total_files}개 파일 변환 완료!\n\n출력 위치:\n{dest_path}")
+                if total > 0:
+                    self._log(f"\n완료! CSV 파일 {total}개 생성됨.")
+                    messagebox.showinfo("완료",
+                        f"CSV {total}개 파일 생성 완료!\n\n출력 위치:\n{dest_path}")
                 else:
                     self._log("\n변환된 파일이 없습니다.")
+                    messagebox.showwarning("결과 없음", "변환된 데이터가 없습니다.")
             self.after(0, _finish)
 
         threading.Thread(
@@ -346,7 +388,5 @@ class App(tk.Tk):
         ).start()
 
 
-# ─────────────────────────────────────────────
 if __name__ == "__main__":
-    app = App()
-    app.mainloop()
+    App().mainloop()
