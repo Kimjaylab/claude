@@ -274,7 +274,21 @@ def convert_xio(xio_path: Path, dest_dir: Path, log, opts: dict):
     # 출력 파일명: 시간 형식 + 저장 주기 포함 (중복 방지)
     fmt_tag = "ms" if time_fmt == "tick_ms" else "hhmmss"
     hz_tag  = f"_{save_hz:g}Hz" if use_period else ""
-    out_path = dest_dir / f"{xio_path.stem}_{fmt_tag}{hz_tag}.csv"
+    # 채널 약어 (전체 선택 시 태그 없음, 일부만 선택 시 약어 나열)
+    ALL_CH = {GPS_ADDRESS} | set(WANTED_ADDRESSES.keys())
+    CH_ABBR = {
+        GPS_ADDRESS:    "gps",
+        "/sensors":     "sen",
+        "/quaternion":  "quat",
+        "/humidity":    "hum",
+        "/temperature": "temp",
+    }
+    CH_ORDER = [GPS_ADDRESS, "/sensors", "/quaternion", "/humidity", "/temperature"]
+    if enabled_ch >= ALL_CH:
+        ch_tag = ""
+    else:
+        ch_tag = "_" + "-".join(CH_ABBR[a] for a in CH_ORDER if a in enabled_ch)
+    out_path = dest_dir / f"{xio_path.stem}_{fmt_tag}{hz_tag}{ch_tag}.csv"
 
     # ── 타임라인 결정 ───────────────────────────
     if use_period:
