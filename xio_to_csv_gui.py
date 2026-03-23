@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-NGIMU XIO to CSV Converter - GUI
+NGIMU XIO to CSV Converter - GUI v3.0
 XIO 파일 포맷: SLIP 프레임 안에 OSC 번들/메시지가 담긴 바이너리
 """
 
@@ -131,7 +131,7 @@ def parse_osc_packet(data: bytes, parent_time: float = 0.0) -> list:
 # 출력할 OSC 주소와 컬럼 헤더 (순서 유지)
 # ─────────────────────────────────────────────
 
-GPS_ADDRESS = "/gps"   # NGIMU GPS OSC 주소 (Latitude, Longitude, ...)
+GPS_ADDRESS = "/gps"
 
 WANTED_ADDRESSES = {
     "/humidity":    ["Humidity (%)"],
@@ -152,9 +152,39 @@ def seconds_to_hhmmss(t: float) -> str:
     return f"{sign}{h:02d}:{m:02d}:{s:02d}"
 
 
+def seconds_to_ms(t: float) -> str:
+    """초 → ms 정수 문자열."""
+    return str(round(t * 1000))
+
+
 # ─────────────────────────────────────────────
 # 변환 로직
 # ─────────────────────────────────────────────
+
+def _find_closest(msgs: list, t: float, half_period: float):
+    """
+    시각 t에 가장 가까운 메시지 args 반환.
+    half_period 범위를 벗어나면 None 반환 (평균 없음, 최근접값만).
+    이진 탐색으로 O(log n) 처리.
+    """
+    if not msgs:
+        return None
+    lo, hi = 0, len(msgs) - 1
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if msgs[mid]["time"] < t:
+            lo = mid + 1
+        else:
+            hi = mid
+    # lo 또는 lo-1 중 t에 더 가까운 후보 선택
+    candidates = [lo]
+    if lo > 0:
+        candidates.append(lo - 1)
+    best = min(candidates, key=lambda i: abs(msgs[i]["time"] - t))
+    if abs(msgs[best]["time"] - t) <= half_period:
+        return msgs[best]["args"]
+    return None
+
 
 def _forward_fill(msgs: list, t: float):
     """시각 t 이하의 가장 최근 메시지 args 반환 (이진 탐색)."""
@@ -169,8 +199,12 @@ def _forward_fill(msgs: list, t: float):
     return result
 
 
-def convert_xio(xio_path: Path, dest_dir: Path, log):
-    """XIO 바이너리 파일 → 통합 CSV 1개 (GPS 타임라인 기준)."""
+def _fmt_time(t: float, fmt: str) -> str:
+    return seconds_to_ms(t) if fmt == "tick_ms" else seconds_to_hhmmss(t)
+
+
+def convert_xio(xio_path: Path, dest_dir: Path, log, opts: dict):
+    """XIO 바이너리 파일 → 통합 CSV 1개."""
     raw = xio_path.read_bytes()
     log(f"  파일 크기: {len(raw):,} bytes")
 
@@ -189,8 +223,7 @@ def convert_xio(xio_path: Path, dest_dir: Path, log):
         log("  [경고] 파싱된 데이터가 없습니다.")
         return 0
 
-    # NTP 절대시각 → 녹화 시작 기준 상대시각으로 정규화
-    # (time=0 인 비번들 패킷은 제외하고 최솟값 계산)
+    # NTP 절대시각 → 녹화 시작 기준 상대시각 정규화
     valid_times = [m["time"] for msgs in by_address.values() for m in msgs if m["time"] > 0]
     t0 = min(valid_times) if valid_times else 0.0
     if t0 > 0:
@@ -199,71 +232,129 @@ def convert_xio(xio_path: Path, dest_dir: Path, log):
                 if m["time"] > 0:
                     m["time"] -= t0
     log(f"  시작 시각 기준 정규화 완료 (t0 = {t0:.2f}s)")
-
-    # 파일에 존재하는 전체 OSC 주소 출력 (진단용)
     log(f"  파일 내 전체 주소: {', '.join(sorted(by_address.keys()))}")
+
+    # ms 단위 시간값 존재 여부 확인
+    has_ms_precision = any(
+        (m["time"] % 1.0) != 0.0
+        for msgs in by_address.values() for m in msgs if m["time"] > 0
+    )
+    log(f"  ms 단위 시간값: {'있음' if has_ms_precision else '없음 (초 단위만)'}")
 
     # GPS 확인
     gps_msgs = by_address.get(GPS_ADDRESS, [])
     if gps_msgs:
-        log(f"  GPS ({GPS_ADDRESS}): {len(gps_msgs):,}개 → 주 타임라인")
+        log(f"  GPS ({GPS_ADDRESS}): {len(gps_msgs):,}개")
     else:
         log(f"  [경고] GPS 데이터({GPS_ADDRESS}) 없음")
 
-    # 원하는 센서 확인
     for addr, cols in WANTED_ADDRESSES.items():
         n = len(by_address.get(addr, []))
         log(f"  {addr}: {n:,}개" if n else f"  [없음] {addr}")
 
-    # 주 타임라인 결정
-    if gps_msgs:
-        primary = gps_msgs
-        has_gps = True
+    # 옵션 파싱
+    time_fmt      = opts.get("time_format", "hhmmss")   # "hhmmss" | "tick_ms"
+    save_hz       = opts.get("save_hz", 0.0)
+    use_period    = save_hz > 0
+    enabled_ch    = opts.get("enabled_channels", set(WANTED_ADDRESSES.keys()) | {GPS_ADDRESS})
+    encoding      = "utf-8-sig" if opts.get("utf8bom", True) else "utf-8"
+
+    # 활성화된 센서 컬럼 구성
+    col_specs = [
+        (addr, cols)
+        for addr, cols in WANTED_ADDRESSES.items()
+        if addr in by_address and addr in enabled_ch
+    ]
+    has_gps = bool(gps_msgs) and (GPS_ADDRESS in enabled_ch)
+
+    # 시간 헤더
+    time_header = "Time (ms)" if time_fmt == "tick_ms" else "Time (HH:MM:SS)"
+    headers = [time_header, "Latitude", "Longitude"] + [c for _, cols in col_specs for c in cols]
+
+    # ── 타임라인 결정 ───────────────────────────
+    if use_period:
+        # 고정 주기 타임라인: 가장 가까운 값 사용 (평균 없음)
+        period = 1.0 / save_hz
+        half_period = period / 2.0
+        t_max = max(m["time"] for msgs in by_address.values() for m in msgs if m["time"] > 0)
+        n_steps = int(t_max / period) + 1
+        log(f"  저장 주기: {save_hz}Hz  간격: {period*1000:.1f}ms  총 {n_steps}행")
+
+        out_path = dest_dir / f"{xio_path.stem}_unified.csv"
+        with open(out_path, "w", newline="", encoding=encoding) as f:
+            writer = csv.writer(f)
+            writer.writerow(headers)
+
+            for i in range(n_steps):
+                t = i * period
+                row = [_fmt_time(t, time_fmt)]
+
+                # GPS
+                if has_gps:
+                    args = _find_closest(gps_msgs, t, half_period)
+                    row += ([f"{args[0]:.7f}", f"{args[1]:.7f}"]
+                            if args and len(args) >= 2 else ["", ""])
+                else:
+                    row += ["", ""]
+
+                # 센서
+                for addr, cols in col_specs:
+                    args = _find_closest(by_address[addr], t, half_period) or []
+                    row += [str(args[k]) if k < len(args) else "" for k in range(len(cols))]
+
+                writer.writerow(row)
+
+        log(f"  ✓ {out_path.name}  ({n_steps:,}행, {len(headers)}개 컬럼)")
+        return 1
+
     else:
-        available = {a: by_address[a] for a in WANTED_ADDRESSES if a in by_address}
-        if not available:
-            log("  [경고] 사용 가능한 데이터가 없습니다.")
-            return 0
-        primary_addr = max(available, key=lambda a: len(available[a]))
-        primary = available[primary_addr]
-        has_gps = False
-        log(f"  {primary_addr}를 주 타임라인으로 사용")
+        # 원시 타임라인: GPS 또는 가장 많은 센서 기준 + forward-fill
+        if has_gps:
+            primary = gps_msgs
+            primary_is_gps = True
+        else:
+            available = {a: by_address[a] for a in WANTED_ADDRESSES
+                         if a in by_address and a in enabled_ch}
+            if not available:
+                log("  [경고] 사용 가능한 데이터가 없습니다.")
+                return 0
+            primary_addr = max(available, key=lambda a: len(available[a]))
+            primary = available[primary_addr]
+            primary_is_gps = False
+            log(f"  {primary_addr}를 주 타임라인으로 사용")
 
-    # 컬럼 헤더 구성
-    headers = ["Time (HH:MM:SS)", "Latitude", "Longitude"]
-    col_specs = [(addr, cols) for addr, cols in WANTED_ADDRESSES.items()
-                 if addr in by_address]
-    for _, cols in col_specs:
-        headers.extend(cols)
+        out_path = dest_dir / f"{xio_path.stem}_unified.csv"
+        with open(out_path, "w", newline="", encoding=encoding) as f:
+            writer = csv.writer(f)
+            writer.writerow(headers)
 
-    # CSV 출력
-    out_path = dest_dir / f"{xio_path.stem}_unified.csv"
-    with open(out_path, "w", newline="", encoding="utf-8-sig") as f:
-        writer = csv.writer(f)
-        writer.writerow(headers)
+            for msg in primary:
+                t = msg["time"]
+                row = [_fmt_time(t, time_fmt)]
 
-        for msg in primary:
-            t = msg["time"]
-            row = [seconds_to_hhmmss(t)]
+                # GPS
+                if has_gps:
+                    if primary_is_gps and len(msg["args"]) >= 2:
+                        row += [f"{msg['args'][0]:.7f}", f"{msg['args'][1]:.7f}"]
+                    else:
+                        args = _forward_fill(gps_msgs, t)
+                        row += ([f"{args[0]:.7f}", f"{args[1]:.7f}"]
+                                if args and len(args) >= 2 else ["", ""])
+                else:
+                    row += ["", ""]
 
-            # 위도/경도
-            if has_gps and len(msg["args"]) >= 2:
-                row += [f"{msg['args'][0]:.7f}", f"{msg['args'][1]:.7f}"]
-            else:
-                row += ["", ""]
+                # 센서 (forward-fill)
+                for addr, cols in col_specs:
+                    args = _forward_fill(by_address[addr], t) or []
+                    row += [str(args[k]) if k < len(args) else "" for k in range(len(cols))]
 
-            # 나머지 센서 (forward-fill)
-            for addr, cols in col_specs:
-                args = _forward_fill(by_address[addr], t) or []
-                row += [str(args[i]) if i < len(args) else "" for i in range(len(cols))]
+                writer.writerow(row)
 
-            writer.writerow(row)
-
-    log(f"  ✓ {out_path.name}  ({len(primary):,}행, {len(headers)}개 컬럼)")
-    return 1
+        log(f"  ✓ {out_path.name}  ({len(primary):,}행, {len(headers)}개 컬럼)")
+        return 1
 
 
-def run_conversion(input_paths: list, dest_dir: Path, log, on_done):
+def run_conversion(input_paths: list, dest_dir: Path, log, on_done, opts: dict):
     try:
         total = 0
         for p in input_paths:
@@ -275,7 +366,7 @@ def run_conversion(input_paths: list, dest_dir: Path, log, on_done):
             if p.suffix.upper() != ".XIO":
                 log(f"  [오류] .XIO 파일이 아닙니다: {p.suffix}")
                 continue
-            n = convert_xio(p, dest_dir, log)
+            n = convert_xio(p, dest_dir, log, opts)
             total += n
         on_done(total)
     except Exception as e:
@@ -295,8 +386,8 @@ PLACEHOLDER = "Select SD card file(s)"
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("NGIMU XIO to CSV Converter v2.0")
-        self.resizable(False, False)
+        self.title("NGIMU XIO to CSV Converter v3.0")
+        self.resizable(True, False)
         self._input_paths = []
         self._build_ui()
         self._center()
@@ -308,42 +399,74 @@ class App(tk.Tk):
         self.geometry(f"+{(sw-w)//2}+{(sh-h)//2}")
 
     def _build_ui(self):
-        P = {"padx": 8, "pady": 4}
+        self.columnconfigure(0, weight=1)
+        P = {"padx": 8, "pady": 3}
 
-        # SD Card File(s)
-        tk.Label(self, text="SD Card File(s):").grid(row=0, column=0, sticky="e", **P)
+        # ── Input / Output ──────────────────────────
+        io_frame = tk.LabelFrame(self, text="Input / Output", padx=6, pady=4)
+        io_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 4))
+        io_frame.columnconfigure(1, weight=1)
+
+        tk.Label(io_frame, text="SD Card File(s):").grid(row=0, column=0, sticky="e", **P)
         self.files_var = tk.StringVar()
         self.files_entry = tk.Entry(
-            self, textvariable=self.files_var, width=52, fg="grey",
+            io_frame, textvariable=self.files_var, width=55, fg="grey",
             relief="flat", highlightthickness=1,
             highlightbackground="#aaa", highlightcolor="#0078d4")
         self.files_entry.insert(0, PLACEHOLDER)
         self.files_entry.bind("<FocusIn>", self._clear_ph)
         self.files_entry.grid(row=0, column=1, sticky="ew", **P)
-        tk.Button(self, text="...", width=3, command=self._browse_files).grid(row=0, column=2, **P)
+        tk.Button(io_frame, text="...", width=3,
+                  command=self._browse_files).grid(row=0, column=2, **P)
 
-        # Destination Directory
-        tk.Label(self, text="Destination Directory:").grid(row=1, column=0, sticky="e", **P)
+        tk.Label(io_frame, text="Destination Directory:").grid(row=1, column=0, sticky="e", **P)
         self.dest_var = tk.StringVar(value=str(Path.home() / "Desktop"))
         tk.Entry(
-            self, textvariable=self.dest_var, width=52,
+            io_frame, textvariable=self.dest_var, width=55,
             relief="flat", highlightthickness=1,
             highlightbackground="#aaa", highlightcolor="#0078d4"
         ).grid(row=1, column=1, sticky="ew", **P)
-        tk.Button(self, text="...", width=3, command=self._browse_dest).grid(row=1, column=2, **P)
+        tk.Button(io_frame, text="...", width=3,
+                  command=self._browse_dest).grid(row=1, column=2, **P)
 
-        # Convert 버튼
+        # ── Save Options (스크롤 가능) ──────────────
+        opts_outer = tk.LabelFrame(self, text="Save Options", padx=6, pady=4)
+        opts_outer.grid(row=1, column=0, sticky="ew", padx=10, pady=4)
+        opts_outer.columnconfigure(0, weight=1)
+
+        canvas = tk.Canvas(opts_outer, height=240, highlightthickness=0)
+        vsb = tk.Scrollbar(opts_outer, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=vsb.set)
+        vsb.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+
+        self.opts_frame = tk.Frame(canvas)
+        self.opts_frame.columnconfigure(0, weight=1)
+        win_id = canvas.create_window((0, 0), window=self.opts_frame, anchor="nw")
+
+        self.opts_frame.bind("<Configure>",
+                             lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>",
+                    lambda e: canvas.itemconfig(win_id, width=e.width))
+        # 마우스 휠 스크롤
+        canvas.bind("<MouseWheel>",
+                    lambda e: canvas.yview_scroll(-1 * (e.delta // 120), "units"))
+
+        self._build_options(self.opts_frame)
+
+        # ── Convert 버튼 ────────────────────────────
         btn_frame = tk.Frame(self)
-        btn_frame.grid(row=2, column=0, columnspan=3, sticky="e", padx=8, pady=4)
-        self.convert_btn = tk.Button(btn_frame, text="Convert", width=10, command=self._start)
+        btn_frame.grid(row=2, column=0, sticky="e", padx=10, pady=4)
+        self.convert_btn = tk.Button(btn_frame, text="Convert", width=14,
+                                     command=self._start)
         self.convert_btn.pack()
 
-        # 로그창
+        # ── 로그창 ──────────────────────────────────
         self.log_frame = tk.Frame(self)
-        self.log_frame.grid(row=3, column=0, columnspan=3, sticky="nsew", padx=8, pady=(0, 4))
+        self.log_frame.grid(row=3, column=0, sticky="nsew", padx=10, pady=(0, 4))
         self.log_frame.grid_remove()
         self.log_text = tk.Text(
-            self.log_frame, width=70, height=14, state="disabled",
+            self.log_frame, width=72, height=14, state="disabled",
             relief="flat", bg="#1e1e1e", fg="#d4d4d4",
             font=("Consolas", 9), wrap="word")
         self.log_text.pack(side="left", fill="both", expand=True)
@@ -351,10 +474,137 @@ class App(tk.Tk):
         sb.pack(side="right", fill="y")
         self.log_text.config(yscrollcommand=sb.set)
 
-        # 진행바
-        self.progress = ttk.Progressbar(self, mode="indeterminate", length=480)
-        self.progress.grid(row=4, column=0, columnspan=3, padx=8, pady=(0, 8), sticky="ew")
+        # ── 진행바 ──────────────────────────────────
+        self.progress = ttk.Progressbar(self, mode="indeterminate", length=500)
+        self.progress.grid(row=4, column=0, padx=10, pady=(0, 8), sticky="ew")
         self.progress.grid_remove()
+
+    # ────────────────────────────────────────────
+    # 옵션 패널 구성 (항목 추가/수정 용이하도록 섹션별 분리)
+    # ────────────────────────────────────────────
+
+    def _build_options(self, parent):
+        P = {"padx": 6, "pady": 2}
+        r = 0
+
+        # ── 섹션 1: 시간 형식 ────────────────────
+        tf = tk.LabelFrame(parent, text="Time Format", padx=6, pady=4)
+        tf.grid(row=r, column=0, sticky="ew", padx=4, pady=(4, 2))
+        tf.columnconfigure(2, weight=1)
+        r += 1
+
+        self.time_fmt_var = tk.StringVar(value="hhmmss")
+        tk.Radiobutton(tf, text="HH:MM:SS  (시:분:초)",
+                       variable=self.time_fmt_var, value="hhmmss").grid(
+                       row=0, column=0, sticky="w", padx=10)
+        tk.Radiobutton(tf, text="Tick (ms)  (밀리초 정수)",
+                       variable=self.time_fmt_var, value="tick_ms").grid(
+                       row=0, column=1, sticky="w", padx=10)
+
+        # ── 섹션 2: 저장 주기 ────────────────────
+        pf = tk.LabelFrame(parent, text="Save Period", padx=6, pady=4)
+        pf.grid(row=r, column=0, sticky="ew", padx=4, pady=2)
+        pf.columnconfigure(3, weight=1)
+        r += 1
+
+        self.use_period_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(pf, text="고정 주기 활성화:",
+                       variable=self.use_period_var,
+                       command=self._on_period_toggle).grid(
+                       row=0, column=0, sticky="w")
+
+        self.hz_var = tk.StringVar(value="1")
+        self.hz_entry = tk.Entry(pf, textvariable=self.hz_var, width=8,
+                                 state="disabled", relief="flat",
+                                 highlightthickness=1, highlightbackground="#aaa")
+        self.hz_entry.grid(row=0, column=1, padx=4)
+        tk.Label(pf, text="Hz").grid(row=0, column=2, sticky="w")
+
+        self.period_info_lbl = tk.Label(pf, text="", fg="grey", font=("Arial", 8))
+        self.period_info_lbl.grid(row=1, column=0, columnspan=4, sticky="w", pady=(0, 2))
+
+        self.hz_var.trace_add("write", self._update_period_info)
+        self._on_period_toggle()
+
+        # ── 섹션 3: 데이터 채널 선택 ─────────────
+        cf = tk.LabelFrame(parent, text="Data Channels", padx=6, pady=4)
+        cf.grid(row=r, column=0, sticky="ew", padx=4, pady=2)
+        r += 1
+
+        CHANNELS = [
+            (GPS_ADDRESS,    "GPS (Lat / Lon)"),
+            ("/sensors",     "Sensors  (Gyro / Accel / Mag)"),
+            ("/quaternion",  "Quaternion  (W / X / Y / Z)"),
+            ("/humidity",    "Humidity"),
+            ("/temperature", "Temperature"),
+        ]
+        self.ch_vars = {}
+        for idx, (addr, label) in enumerate(CHANNELS):
+            v = tk.BooleanVar(value=True)
+            self.ch_vars[addr] = v
+            tk.Checkbutton(cf, text=label, variable=v).grid(
+                row=idx // 2, column=idx % 2, sticky="w", padx=10, pady=1)
+
+        # ── 섹션 4: 출력 옵션 ────────────────────
+        of = tk.LabelFrame(parent, text="Output Options", padx=6, pady=4)
+        of.grid(row=r, column=0, sticky="ew", padx=4, pady=(2, 6))
+        r += 1
+
+        self.utf8bom_var = tk.BooleanVar(value=True)
+        tk.Checkbutton(of, text="UTF-8 BOM 포함  (Excel 한글 호환)",
+                       variable=self.utf8bom_var).grid(
+                       row=0, column=0, sticky="w", padx=10)
+
+        self.open_after_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(of, text="변환 완료 후 출력 폴더 열기",
+                       variable=self.open_after_var).grid(
+                       row=0, column=1, sticky="w", padx=10)
+
+    # ────────────────────────────────────────────
+    # 콜백
+    # ────────────────────────────────────────────
+
+    def _on_period_toggle(self):
+        if self.use_period_var.get():
+            self.hz_entry.config(state="normal")
+            self._update_period_info()
+        else:
+            self.hz_entry.config(state="disabled")
+            self.period_info_lbl.config(
+                text="주기 미설정: 원시 데이터 타임라인 사용 (GPS 또는 최다 센서 기준)",
+                fg="grey")
+
+    def _update_period_info(self, *_):
+        if not self.use_period_var.get():
+            return
+        try:
+            hz = float(self.hz_var.get())
+            if hz <= 0:
+                raise ValueError
+            ms = 1000.0 / hz
+            self.period_info_lbl.config(
+                text=f"간격 {ms:.2f} ms → 초당 최대 {hz:.0f}개 저장  "
+                     f"(평균 없음, 해당 시각에 가장 가까운 값 1개 사용)",
+                fg="#0055aa")
+        except ValueError:
+            self.period_info_lbl.config(text="Hz 값이 올바르지 않습니다.", fg="red")
+
+    def _get_opts(self) -> dict:
+        opts = {
+            "time_format":      self.time_fmt_var.get(),
+            "save_hz":          0.0,
+            "enabled_channels": {addr for addr, v in self.ch_vars.items() if v.get()},
+            "utf8bom":          self.utf8bom_var.get(),
+            "open_after":       self.open_after_var.get(),
+        }
+        if self.use_period_var.get():
+            try:
+                hz = float(self.hz_var.get())
+                if hz > 0:
+                    opts["save_hz"] = hz
+            except ValueError:
+                pass
+        return opts
 
     def _clear_ph(self, _):
         if self.files_entry.get() == PLACEHOLDER:
@@ -398,6 +648,11 @@ class App(tk.Tk):
             messagebox.showwarning("출력 없음", "Destination Directory를 선택하세요.")
             return
 
+        opts = self._get_opts()
+        if self.use_period_var.get() and opts["save_hz"] == 0.0:
+            messagebox.showwarning("주기 오류", "저장 주기(Hz)를 올바르게 입력하세요.")
+            return
+
         dest_path = Path(dest)
         dest_path.mkdir(parents=True, exist_ok=True)
 
@@ -405,13 +660,17 @@ class App(tk.Tk):
         self.log_frame.grid()
         self.progress.grid()
         self.progress.start(10)
-
         self.log_text.config(state="normal")
         self.log_text.delete("1.0", "end")
         self.log_text.config(state="disabled")
 
         self._log(f"변환 시작 | 파일 수: {len(paths)}")
         self._log(f"출력 경로: {dest_path}")
+        self._log(f"시간 형식: {'Tick (ms)' if opts['time_format'] == 'tick_ms' else 'HH:MM:SS'}")
+        if opts["save_hz"] > 0:
+            self._log(f"저장 주기: {opts['save_hz']}Hz  ({1000/opts['save_hz']:.2f}ms 간격, 최근접값)")
+        else:
+            self._log("저장 주기: 원시 타임라인 사용")
 
         def on_done(total):
             def _finish():
@@ -422,6 +681,8 @@ class App(tk.Tk):
                     self._log(f"\n완료! CSV 파일 {total}개 생성됨.")
                     messagebox.showinfo("완료",
                         f"CSV {total}개 파일 생성 완료!\n\n출력 위치:\n{dest_path}")
+                    if opts.get("open_after") and sys.platform == "win32":
+                        os.startfile(dest_path)
                 else:
                     self._log("\n변환된 파일이 없습니다.")
                     messagebox.showwarning("결과 없음", "변환된 데이터가 없습니다.")
@@ -429,7 +690,7 @@ class App(tk.Tk):
 
         threading.Thread(
             target=run_conversion,
-            args=(paths, dest_path, self._log, on_done),
+            args=(paths, dest_path, self._log, on_done, opts),
             daemon=True
         ).start()
 
