@@ -189,6 +189,13 @@ def convert_xio(xio_path: Path, dest_dir: Path, log):
         log("  [경고] 파싱된 데이터가 없습니다.")
         return 0
 
+    # NTP 절대시각 → 녹화 시작 기준 상대시각으로 정규화
+    t0 = min(m["time"] for msgs in by_address.values() for m in msgs)
+    for msgs in by_address.values():
+        for m in msgs:
+            m["time"] -= t0
+    log(f"  시작 시각 기준 정규화 완료 (t0 = {t0:.2f}s)")
+
     # GPS 확인
     gps_msgs = by_address.get(GPS_ADDRESS, [])
     if gps_msgs:
