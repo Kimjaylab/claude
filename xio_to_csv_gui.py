@@ -145,14 +145,12 @@ WANTED_ADDRESSES = {
 
 
 def seconds_to_hhmmss(t: float) -> str:
-    td = timedelta(seconds=abs(t))
-    total_s = int(td.total_seconds())
-    h  = total_s // 3600
-    m  = (total_s % 3600) // 60
-    s  = total_s % 60
-    ms = round((abs(t) - int(abs(t))) * 1000)
+    total_s = int(abs(t))
+    h = total_s // 3600
+    m = (total_s % 3600) // 60
+    s = total_s % 60
     sign = "-" if t < 0 else ""
-    return f"{sign}{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
+    return f"{sign}{h:02d}:{m:02d}:{s:02d}"
 
 
 # ─────────────────────────────────────────────
@@ -219,7 +217,7 @@ def convert_xio(xio_path: Path, dest_dir: Path, log):
         log(f"  {primary_addr}를 주 타임라인으로 사용")
 
     # 컬럼 헤더 구성
-    headers = ["Time (HH:MM:SS.mmm)", "Latitude", "Longitude"]
+    headers = ["Time (HH:MM:SS)", "Latitude", "Longitude"]
     col_specs = [(addr, cols) for addr, cols in WANTED_ADDRESSES.items()
                  if addr in by_address]
     for _, cols in col_specs:
