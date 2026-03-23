@@ -1,10 +1,10 @@
 @echo off
-echo NGIMU GUI 빌드 시작...
+echo Building NGIMU GUI...
 
-pip install pyinstaller
+python -m pip install pyinstaller
 
-pyinstaller --onefile --windowed --name "NGIMU GUI" xio_to_csv_gui.py
+python -m PyInstaller --onefile --windowed --name "NGIMU GUI" xio_to_csv_gui.py
 
 echo.
-echo 완료! dist\NGIMU GUI.exe 를 확인하세요.
+echo Done! Check dist\NGIMU GUI.exe
 pause
