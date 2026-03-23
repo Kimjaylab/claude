@@ -200,6 +200,9 @@ def convert_xio(xio_path: Path, dest_dir: Path, log):
                     m["time"] -= t0
     log(f"  시작 시각 기준 정규화 완료 (t0 = {t0:.2f}s)")
 
+    # 파일에 존재하는 전체 OSC 주소 출력 (진단용)
+    log(f"  파일 내 전체 주소: {', '.join(sorted(by_address.keys()))}")
+
     # GPS 확인
     gps_msgs = by_address.get(GPS_ADDRESS, [])
     if gps_msgs:
