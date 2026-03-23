@@ -129,27 +129,18 @@ def parse_osc_packet(data: bytes, parent_time: float = 0.0) -> list:
 
 
 # ─────────────────────────────────────────────
-# 알려진 NGIMU OSC 주소 → 컬럼 헤더
+# 출력할 OSC 주소와 컬럼 헤더 (순서 유지)
 # ─────────────────────────────────────────────
 
-OSC_HEADERS = {
-    "/battery":    ["Charge (%)", "Voltage (V)", "Current (mA)", "Temperature (°C)"],
-    "/temperature":["Temperature (°C)"],
-    "/humidity":   ["Humidity (%)"],
-    "/barometer":  ["Pressure (hPa)"],
-    "/magnetics":  ["Mag X (uT)", "Mag Y (uT)", "Mag Z (uT)"],
-    "/inertial":   ["Gyro X (deg/s)", "Gyro Y (deg/s)", "Gyro Z (deg/s)",
-                    "Accel X (g)",   "Accel Y (g)",    "Accel Z (g)"],
-    "/sensors":    ["Gyro X (deg/s)", "Gyro Y (deg/s)", "Gyro Z (deg/s)",
-                    "Accel X (g)",   "Accel Y (g)",    "Accel Z (g)",
-                    "Mag X (uT)",    "Mag Y (uT)",     "Mag Z (uT)"],
-    "/quaternion": ["W", "X", "Y", "Z"],
-    "/euler":      ["Roll (deg)", "Pitch (deg)", "Yaw (deg)"],
-    "/linear":     ["Linear Accel X (g)", "Linear Accel Y (g)", "Linear Accel Z (g)"],
-    "/earth":      ["Earth Accel X (g)",  "Earth Accel Y (g)",  "Earth Accel Z (g)"],
-    "/altitude":   ["Altitude (m)"],
-    "/analogue":   [f"Analogue {i}" for i in range(1, 9)],
-    "/rssi":       ["RSSI (dBm)"],
+GPS_ADDRESS = "/gps"   # NGIMU GPS OSC 주소 (Latitude, Longitude, ...)
+
+WANTED_ADDRESSES = {
+    "/humidity":    ["Humidity (%)"],
+    "/quaternion":  ["W", "X", "Y", "Z"],
+    "/sensors":     ["Gyro X (deg/s)", "Gyro Y (deg/s)", "Gyro Z (deg/s)",
+                     "Accel X (g)",   "Accel Y (g)",    "Accel Z (g)",
+                     "Mag X (uT)",    "Mag Y (uT)",     "Mag Z (uT)"],
+    "/temperature": ["Temperature (°C)"],
 }
 
 
@@ -168,71 +159,96 @@ def seconds_to_hhmmss(t: float) -> str:
 # 변환 로직
 # ─────────────────────────────────────────────
 
+def _forward_fill(msgs: list, t: float):
+    """시각 t 이하의 가장 최근 메시지 args 반환 (이진 탐색)."""
+    lo, hi, result = 0, len(msgs) - 1, None
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        if msgs[mid]["time"] <= t:
+            result = msgs[mid]["args"]
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return result
+
+
 def convert_xio(xio_path: Path, dest_dir: Path, log):
-    """XIO 바이너리 파일 → 통합 CSV 1개."""
+    """XIO 바이너리 파일 → 통합 CSV 1개 (GPS 타임라인 기준)."""
     raw = xio_path.read_bytes()
     log(f"  파일 크기: {len(raw):,} bytes")
 
     packets = slip_decode(raw)
     log(f"  SLIP 패킷 수: {len(packets):,}")
 
-    # 모든 메시지 수집
-    all_messages = []
+    # 주소별 메시지 수집 후 시간순 정렬
+    by_address = defaultdict(list)
     for pkt in packets:
-        all_messages.extend(parse_osc_packet(pkt))
+        for msg in parse_osc_packet(pkt):
+            by_address[msg["address"]].append(msg)
+    for addr in by_address:
+        by_address[addr].sort(key=lambda m: m["time"])
 
-    if not all_messages:
+    if not by_address:
         log("  [경고] 파싱된 데이터가 없습니다.")
         return 0
 
-    # 주소별 최대 인자 수 파악 → 통합 컬럼 헤더 구성
-    addr_max_args = defaultdict(int)
-    for msg in all_messages:
-        addr_max_args[msg["address"]] = max(addr_max_args[msg["address"]], len(msg["args"]))
+    # GPS 확인
+    gps_msgs = by_address.get(GPS_ADDRESS, [])
+    if gps_msgs:
+        log(f"  GPS ({GPS_ADDRESS}): {len(gps_msgs):,}개 → 주 타임라인")
+    else:
+        log(f"  [경고] GPS 데이터({GPS_ADDRESS}) 없음")
 
-    # 주소별 컬럼 헤더 (알려진 이름 or Value_N)
-    addr_headers = {}
-    for address, n in sorted(addr_max_args.items()):
-        known = OSC_HEADERS.get(address, [])
-        cols = []
-        for i in range(n):
-            if i < len(known):
-                cols.append(f"{address}/{known[i]}")
-            else:
-                cols.append(f"{address}/Value_{i+1}")
-        addr_headers[address] = cols
+    # 원하는 센서 확인
+    for addr, cols in WANTED_ADDRESSES.items():
+        n = len(by_address.get(addr, []))
+        log(f"  {addr}: {n:,}개" if n else f"  [없음] {addr}")
 
-    # 전체 컬럼 목록 (주소 순서 고정)
-    all_value_cols = []
-    for address in sorted(addr_headers):
-        all_value_cols.extend(addr_headers[address])
-    col_index = {col: i for i, col in enumerate(all_value_cols)}
+    # 주 타임라인 결정
+    if gps_msgs:
+        primary = gps_msgs
+        has_gps = True
+    else:
+        available = {a: by_address[a] for a in WANTED_ADDRESSES if a in by_address}
+        if not available:
+            log("  [경고] 사용 가능한 데이터가 없습니다.")
+            return 0
+        primary_addr = max(available, key=lambda a: len(available[a]))
+        primary = available[primary_addr]
+        has_gps = False
+        log(f"  {primary_addr}를 주 타임라인으로 사용")
 
-    # 시간순 정렬
-    all_messages.sort(key=lambda m: m["time"])
+    # 컬럼 헤더 구성
+    headers = ["Time (HH:MM:SS.mmm)", "Latitude", "Longitude"]
+    col_specs = [(addr, cols) for addr, cols in WANTED_ADDRESSES.items()
+                 if addr in by_address]
+    for _, cols in col_specs:
+        headers.extend(cols)
 
-    found_types = sorted(addr_max_args.keys())
-    log(f"  발견된 데이터 타입 ({len(found_types)}종): {', '.join(found_types)}")
-
+    # CSV 출력
     out_path = dest_dir / f"{xio_path.stem}_unified.csv"
-    total_cols = 3 + len(all_value_cols)  # Time(s), Time(HH:MM:SS), DataType, 값들
-
     with open(out_path, "w", newline="", encoding="utf-8-sig") as f:
         writer = csv.writer(f)
-        writer.writerow(["Time (s)", "Time (HH:MM:SS.mmm)", "Data Type"] + all_value_cols)
-        for msg in all_messages:
+        writer.writerow(headers)
+
+        for msg in primary:
             t = msg["time"]
-            row = [""] * total_cols
-            row[0] = f"{t:.6f}"
-            row[1] = seconds_to_hhmmss(t)
-            row[2] = msg["address"]
-            for i, val in enumerate(msg["args"]):
-                col_name = addr_headers[msg["address"]][i] if i < len(addr_headers[msg["address"]]) else None
-                if col_name and col_name in col_index:
-                    row[3 + col_index[col_name]] = str(val)
+            row = [seconds_to_hhmmss(t)]
+
+            # 위도/경도
+            if has_gps and len(msg["args"]) >= 2:
+                row += [f"{msg['args'][0]:.7f}", f"{msg['args'][1]:.7f}"]
+            else:
+                row += ["", ""]
+
+            # 나머지 센서 (forward-fill)
+            for addr, cols in col_specs:
+                args = _forward_fill(by_address[addr], t) or []
+                row += [str(args[i]) if i < len(args) else "" for i in range(len(cols))]
+
             writer.writerow(row)
 
-    log(f"  ✓ {out_path.name}  ({len(all_messages):,}행, {len(all_value_cols)}개 값 컬럼)")
+    log(f"  ✓ {out_path.name}  ({len(primary):,}행, {len(headers)}개 컬럼)")
     return 1
 
 
