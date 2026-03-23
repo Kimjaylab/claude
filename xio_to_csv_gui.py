@@ -271,6 +271,11 @@ def convert_xio(xio_path: Path, dest_dir: Path, log, opts: dict):
     time_header = "Time (ms)" if time_fmt == "tick_ms" else "Time (HH:MM:SS)"
     headers = [time_header, "Latitude", "Longitude"] + [c for _, cols in col_specs for c in cols]
 
+    # 출력 파일명: 시간 형식 + 저장 주기 포함 (중복 방지)
+    fmt_tag = "ms" if time_fmt == "tick_ms" else "hhmmss"
+    hz_tag  = f"_{save_hz:g}Hz" if use_period else ""
+    out_path = dest_dir / f"{xio_path.stem}_{fmt_tag}{hz_tag}.csv"
+
     # ── 타임라인 결정 ───────────────────────────
     if use_period:
         # 고정 주기 타임라인: 가장 가까운 값 사용 (평균 없음)
@@ -279,8 +284,6 @@ def convert_xio(xio_path: Path, dest_dir: Path, log, opts: dict):
         t_max = max(m["time"] for msgs in by_address.values() for m in msgs if m["time"] > 0)
         n_steps = int(t_max / period) + 1
         log(f"  저장 주기: {save_hz}Hz  간격: {period*1000:.1f}ms  총 {n_steps}행")
-
-        out_path = dest_dir / f"{xio_path.stem}_unified.csv"
         with open(out_path, "w", newline="", encoding=encoding) as f:
             writer = csv.writer(f)
             writer.writerow(headers)
@@ -323,7 +326,6 @@ def convert_xio(xio_path: Path, dest_dir: Path, log, opts: dict):
             primary_is_gps = False
             log(f"  {primary_addr}를 주 타임라인으로 사용")
 
-        out_path = dest_dir / f"{xio_path.stem}_unified.csv"
         with open(out_path, "w", newline="", encoding=encoding) as f:
             writer = csv.writer(f)
             writer.writerow(headers)
