@@ -13,7 +13,6 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from pathlib import Path
 from collections import defaultdict
-from datetime import timedelta
 
 
 # ─────────────────────────────────────────────
