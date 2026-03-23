@@ -169,52 +169,71 @@ def seconds_to_hhmmss(t: float) -> str:
 # ─────────────────────────────────────────────
 
 def convert_xio(xio_path: Path, dest_dir: Path, log):
-    """XIO 바이너리 파일 → 타입별 CSV."""
+    """XIO 바이너리 파일 → 통합 CSV 1개."""
     raw = xio_path.read_bytes()
     log(f"  파일 크기: {len(raw):,} bytes")
 
     packets = slip_decode(raw)
     log(f"  SLIP 패킷 수: {len(packets):,}")
 
-    # 메시지 분류
-    by_address = defaultdict(list)
+    # 모든 메시지 수집
+    all_messages = []
     for pkt in packets:
-        for msg in parse_osc_packet(pkt):
-            by_address[msg["address"]].append(msg)
+        all_messages.extend(parse_osc_packet(pkt))
 
-    if not by_address:
+    if not all_messages:
         log("  [경고] 파싱된 데이터가 없습니다.")
         return 0
 
-    log(f"  발견된 데이터 타입: {', '.join(sorted(by_address.keys()))}")
+    # 주소별 최대 인자 수 파악 → 통합 컬럼 헤더 구성
+    addr_max_args = defaultdict(int)
+    for msg in all_messages:
+        addr_max_args[msg["address"]] = max(addr_max_args[msg["address"]], len(msg["args"]))
 
-    # 타입별 CSV 저장
-    written = 0
-    for address, messages in sorted(by_address.items()):
-        safe_name = address.strip("/").replace("/", "_") or "root"
-        out_path = dest_dir / f"{xio_path.stem}_{safe_name}.csv"
+    # 주소별 컬럼 헤더 (알려진 이름 or Value_N)
+    addr_headers = {}
+    for address, n in sorted(addr_max_args.items()):
+        known = OSC_HEADERS.get(address, [])
+        cols = []
+        for i in range(n):
+            if i < len(known):
+                cols.append(f"{address}/{known[i]}")
+            else:
+                cols.append(f"{address}/Value_{i+1}")
+        addr_headers[address] = cols
 
-        # 컬럼 헤더 결정
-        known = OSC_HEADERS.get(address)
-        max_args = max((len(m["args"]) for m in messages), default=0)
-        if known and len(known) >= max_args:
-            value_headers = known[:max_args]
-        else:
-            value_headers = [f"Value_{i+1}" for i in range(max_args)]
+    # 전체 컬럼 목록 (주소 순서 고정)
+    all_value_cols = []
+    for address in sorted(addr_headers):
+        all_value_cols.extend(addr_headers[address])
+    col_index = {col: i for i, col in enumerate(all_value_cols)}
 
-        with open(out_path, "w", newline="", encoding="utf-8-sig") as f:
-            writer = csv.writer(f)
-            writer.writerow(["Time (s)", "Time (HH:MM:SS.mmm)"] + value_headers)
-            for msg in messages:
-                t = msg["time"]
-                row = [f"{t:.6f}", seconds_to_hhmmss(t)]
-                row += [str(a) for a in msg["args"]]
-                writer.writerow(row)
+    # 시간순 정렬
+    all_messages.sort(key=lambda m: m["time"])
 
-        log(f"  ✓ {out_path.name}  ({len(messages):,}행)")
-        written += 1
+    found_types = sorted(addr_max_args.keys())
+    log(f"  발견된 데이터 타입 ({len(found_types)}종): {', '.join(found_types)}")
 
-    return written
+    out_path = dest_dir / f"{xio_path.stem}_unified.csv"
+    total_cols = 3 + len(all_value_cols)  # Time(s), Time(HH:MM:SS), DataType, 값들
+
+    with open(out_path, "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.writer(f)
+        writer.writerow(["Time (s)", "Time (HH:MM:SS.mmm)", "Data Type"] + all_value_cols)
+        for msg in all_messages:
+            t = msg["time"]
+            row = [""] * total_cols
+            row[0] = f"{t:.6f}"
+            row[1] = seconds_to_hhmmss(t)
+            row[2] = msg["address"]
+            for i, val in enumerate(msg["args"]):
+                col_name = addr_headers[msg["address"]][i] if i < len(addr_headers[msg["address"]]) else None
+                if col_name and col_name in col_index:
+                    row[3 + col_index[col_name]] = str(val)
+            writer.writerow(row)
+
+    log(f"  ✓ {out_path.name}  ({len(all_messages):,}행, {len(all_value_cols)}개 값 컬럼)")
+    return 1
 
 
 def run_conversion(input_paths: list, dest_dir: Path, log, on_done):
