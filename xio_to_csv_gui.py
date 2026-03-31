@@ -269,7 +269,8 @@ def convert_xio(xio_path: Path, dest_dir: Path, log, opts: dict):
 
     # 시간 헤더
     time_header = "Time (ms)" if time_fmt == "tick_ms" else "Time (HH:MM:SS)"
-    headers = [time_header, "Latitude", "Longitude"] + [c for _, cols in col_specs for c in cols]
+    gps_headers = ["Latitude", "Longitude"] if has_gps else []
+    headers = [time_header] + gps_headers + [c for _, cols in col_specs for c in cols]
 
     # 출력 파일명: 시간 형식 + 저장 주기 포함 (중복 방지)
     fmt_tag = "ms" if time_fmt == "tick_ms" else "hhmmss"
@@ -311,8 +312,6 @@ def convert_xio(xio_path: Path, dest_dir: Path, log, opts: dict):
                     args = _find_closest(gps_msgs, t, half_period)
                     row += ([f"{args[0]:.7f}", f"{args[1]:.7f}"]
                             if args and len(args) >= 2 else ["", ""])
-                else:
-                    row += ["", ""]
 
                 # 센서
                 for addr, cols in col_specs:
@@ -356,8 +355,6 @@ def convert_xio(xio_path: Path, dest_dir: Path, log, opts: dict):
                         args = _forward_fill(gps_msgs, t)
                         row += ([f"{args[0]:.7f}", f"{args[1]:.7f}"]
                                 if args and len(args) >= 2 else ["", ""])
-                else:
-                    row += ["", ""]
 
                 # 센서 (forward-fill)
                 for addr, cols in col_specs:
