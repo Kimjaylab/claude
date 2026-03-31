@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-NGIMU XIO to CSV Converter - GUI v3.0
+NGIMU XIO to CSV Converter - GUI v1.0
 XIO 파일 포맷: SLIP 프레임 안에 OSC 번들/메시지가 담긴 바이너리
 """
 
@@ -397,7 +397,7 @@ PLACEHOLDER = "Select SD card file(s)"
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("NGIMU XIO to CSV Converter v3.0")
+        self.title("NGIMU XIO to CSV Converter v1.0")
         self.resizable(True, False)
         # 창 아이콘 설정 (PyInstaller 패키징 포함)
         try:
