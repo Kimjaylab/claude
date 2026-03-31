@@ -1,4 +1,5 @@
 @echo off
+cd /d "%~dp0"
 echo Building NGIMU GUI...
 
 where python >nul 2>&1
