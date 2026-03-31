@@ -132,7 +132,7 @@ def parse_osc_packet(data: bytes, parent_time: float = 0.0) -> list:
 # ─────────────────────────────────────────────
 
 GPS_ADDRESS = "/gps"
-NMEA_ADDRESS = "/auxserial/string"
+NMEA_ADDRESS = "/auxserial"
 
 
 def _nmea_to_decimal(value: str, direction: str) -> float | None:
@@ -151,44 +151,40 @@ def _nmea_to_decimal(value: str, direction: str) -> float | None:
 
 def _extract_gps_from_nmea(auxserial_msgs: list) -> list:
     """
-    /auxserial/string 메시지에서 NMEA $GPRMC/$GPGGA 문장을 파싱해
-    GPS 메시지 리스트({"time", "args":[lat, lon]}) 반환.
+    /auxserial 메시지에서 NMEA GPS 위도/경도 추출.
+    args[0] = 완전한 NMEA 문자열 (예: '$GNRMC,055301.00,A,3723.12,N,12658.34,E,...\r\n')
     """
     gps_msgs = []
     for msg in auxserial_msgs:
         args = msg.get("args", [])
-        if not args:
+        if not args or not isinstance(args[0], str):
             continue
-        raw = str(args[0])
-        # 한 메시지에 여러 문장이 있을 수 있으므로 $로 분리
-        for sentence in raw.split("$"):
-            sentence = sentence.strip()
-            if not sentence:
+        sentence = args[0].strip()
+        # 체크섬 제거
+        if "*" in sentence:
+            sentence = sentence[:sentence.index("*")]
+        fields = sentence.split(",")
+        if not fields:
+            continue
+        tag = fields[0].upper()
+
+        # $GPRMC / $GNRMC: [type, hhmmss, A/V, lat, NS, lon, EW, ...]
+        if tag in ("$GPRMC", "$GNRMC") and len(fields) >= 7:
+            if fields[2].upper() != "A":   # A=유효, V=무효
                 continue
-            sentence = "$" + sentence
-            # 체크섬 제거
-            if "*" in sentence:
-                sentence = sentence[:sentence.index("*")]
-            fields = sentence.split(",")
-            tag = fields[0].upper()
+            lat = _nmea_to_decimal(fields[3], fields[4].upper())
+            lon = _nmea_to_decimal(fields[5], fields[6].upper())
+            if lat is not None and lon is not None:
+                gps_msgs.append({"time": msg["time"], "args": [lat, lon]})
 
-            # $GPRMC / $GNRMC
-            if tag in ("$GPRMC", "$GNRMC") and len(fields) >= 7:
-                if fields[2].upper() != "A":   # A=유효, V=무효
-                    continue
-                lat = _nmea_to_decimal(fields[3], fields[4])
-                lon = _nmea_to_decimal(fields[5], fields[6])
-                if lat is not None and lon is not None:
-                    gps_msgs.append({"time": msg["time"], "args": [lat, lon]})
-
-            # $GPGGA / $GNGGA
-            elif tag in ("$GPGGA", "$GNGGA") and len(fields) >= 6:
-                if fields[6] == "0":           # fix quality 0 = 수신 안됨
-                    continue
-                lat = _nmea_to_decimal(fields[2], fields[3])
-                lon = _nmea_to_decimal(fields[4], fields[5])
-                if lat is not None and lon is not None:
-                    gps_msgs.append({"time": msg["time"], "args": [lat, lon]})
+        # $GPGGA / $GNGGA: [type, hhmmss, lat, NS, lon, EW, fix, ...]
+        elif tag in ("$GPGGA", "$GNGGA") and len(fields) >= 7:
+            if fields[6] == "0":           # fix quality 0 = 수신 안됨
+                continue
+            lat = _nmea_to_decimal(fields[2], fields[3].upper())
+            lon = _nmea_to_decimal(fields[4], fields[5].upper())
+            if lat is not None and lon is not None:
+                gps_msgs.append({"time": msg["time"], "args": [lat, lon]})
 
     return gps_msgs
 
