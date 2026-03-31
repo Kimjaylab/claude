@@ -161,10 +161,9 @@ def seconds_to_ms(t: float) -> str:
 # 변환 로직
 # ─────────────────────────────────────────────
 
-def _find_closest(msgs: list, t: float, half_period: float):
+def _find_closest(msgs: list, t: float):
     """
     시각 t에 가장 가까운 메시지 args 반환.
-    half_period 범위를 벗어나면 None 반환 (평균 없음, 최근접값만).
     이진 탐색으로 O(log n) 처리.
     """
     if not msgs:
@@ -176,14 +175,11 @@ def _find_closest(msgs: list, t: float, half_period: float):
             lo = mid + 1
         else:
             hi = mid
-    # lo 또는 lo-1 중 t에 더 가까운 후보 선택
     candidates = [lo]
     if lo > 0:
         candidates.append(lo - 1)
     best = min(candidates, key=lambda i: abs(msgs[i]["time"] - t))
-    if abs(msgs[best]["time"] - t) <= half_period:
-        return msgs[best]["args"]
-    return None
+    return msgs[best]["args"]
 
 
 def _forward_fill(msgs: list, t: float):
@@ -293,9 +289,8 @@ def convert_xio(xio_path: Path, dest_dir: Path, log, opts: dict):
 
     # ── 타임라인 결정 ───────────────────────────
     if use_period:
-        # 고정 주기 타임라인: 가장 가까운 값 사용 (평균 없음)
+        # 고정 주기 타임라인: 각 슬롯마다 가장 가까운 값 1개 사용
         period = 1.0 / save_hz
-        half_period = period / 2.0
         t_max = max(m["time"] for msgs in by_address.values() for m in msgs if m["time"] > 0)
         n_steps = int(t_max / period) + 1
         log(f"  저장 주기: {save_hz}Hz  간격: {period*1000:.1f}ms  총 {n_steps}행")
@@ -309,13 +304,13 @@ def convert_xio(xio_path: Path, dest_dir: Path, log, opts: dict):
 
                 # GPS
                 if has_gps:
-                    args = _find_closest(gps_msgs, t, half_period)
+                    args = _find_closest(gps_msgs, t)
                     row += ([f"{args[0]:.7f}", f"{args[1]:.7f}"]
                             if args and len(args) >= 2 else ["", ""])
 
                 # 센서
                 for addr, cols in col_specs:
-                    args = _find_closest(by_address[addr], t, half_period) or []
+                    args = _find_closest(by_address[addr], t) or []
                     row += [str(args[k]) if k < len(args) else "" for k in range(len(cols))]
 
                 writer.writerow(row)
