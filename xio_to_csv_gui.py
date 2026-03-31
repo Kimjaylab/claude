@@ -132,6 +132,65 @@ def parse_osc_packet(data: bytes, parent_time: float = 0.0) -> list:
 # ─────────────────────────────────────────────
 
 GPS_ADDRESS = "/gps"
+NMEA_ADDRESS = "/auxserial/string"
+
+
+def _nmea_to_decimal(value: str, direction: str) -> float | None:
+    """NMEA ddmm.mmmm 형식 → 십진수 위/경도 변환."""
+    try:
+        v = float(value)
+        degrees = int(v / 100)
+        minutes = v % 100
+        decimal = degrees + minutes / 60.0
+        if direction in ("S", "W"):
+            decimal = -decimal
+        return decimal
+    except (ValueError, TypeError):
+        return None
+
+
+def _extract_gps_from_nmea(auxserial_msgs: list) -> list:
+    """
+    /auxserial/string 메시지에서 NMEA $GPRMC/$GPGGA 문장을 파싱해
+    GPS 메시지 리스트({"time", "args":[lat, lon]}) 반환.
+    """
+    gps_msgs = []
+    for msg in auxserial_msgs:
+        args = msg.get("args", [])
+        if not args:
+            continue
+        raw = str(args[0])
+        # 한 메시지에 여러 문장이 있을 수 있으므로 $로 분리
+        for sentence in raw.split("$"):
+            sentence = sentence.strip()
+            if not sentence:
+                continue
+            sentence = "$" + sentence
+            # 체크섬 제거
+            if "*" in sentence:
+                sentence = sentence[:sentence.index("*")]
+            fields = sentence.split(",")
+            tag = fields[0].upper()
+
+            # $GPRMC / $GNRMC
+            if tag in ("$GPRMC", "$GNRMC") and len(fields) >= 7:
+                if fields[2].upper() != "A":   # A=유효, V=무효
+                    continue
+                lat = _nmea_to_decimal(fields[3], fields[4])
+                lon = _nmea_to_decimal(fields[5], fields[6])
+                if lat is not None and lon is not None:
+                    gps_msgs.append({"time": msg["time"], "args": [lat, lon]})
+
+            # $GPGGA / $GNGGA
+            elif tag in ("$GPGGA", "$GNGGA") and len(fields) >= 6:
+                if fields[6] == "0":           # fix quality 0 = 수신 안됨
+                    continue
+                lat = _nmea_to_decimal(fields[2], fields[3])
+                lon = _nmea_to_decimal(fields[4], fields[5])
+                if lat is not None and lon is not None:
+                    gps_msgs.append({"time": msg["time"], "args": [lat, lon]})
+
+    return gps_msgs
 
 WANTED_ADDRESSES = {
     "/humidity":    ["Humidity (%)"],
@@ -237,12 +296,20 @@ def convert_xio(xio_path: Path, dest_dir: Path, log, opts: dict):
     )
     log(f"  ms 단위 시간값: {'있음' if has_ms_precision else '없음 (초 단위만)'}")
 
-    # GPS 확인
+    # GPS 확인 (네이티브 /gps → 없으면 /auxserial/string NMEA 파싱)
     gps_msgs = by_address.get(GPS_ADDRESS, [])
     if gps_msgs:
         log(f"  GPS ({GPS_ADDRESS}): {len(gps_msgs):,}개")
     else:
-        log(f"  [경고] GPS 데이터({GPS_ADDRESS}) 없음")
+        auxserial_msgs = by_address.get(NMEA_ADDRESS, [])
+        if auxserial_msgs:
+            gps_msgs = _extract_gps_from_nmea(auxserial_msgs)
+            if gps_msgs:
+                log(f"  GPS (NMEA via {NMEA_ADDRESS}): {len(gps_msgs):,}개 파싱됨")
+            else:
+                log(f"  [경고] {NMEA_ADDRESS} 에서 유효한 NMEA GPS 문장 없음")
+        else:
+            log(f"  [경고] GPS 데이터 없음 ({GPS_ADDRESS}, {NMEA_ADDRESS} 모두 없음)")
 
     for addr, cols in WANTED_ADDRESSES.items():
         n = len(by_address.get(addr, []))
