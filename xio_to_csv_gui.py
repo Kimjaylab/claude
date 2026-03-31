@@ -288,12 +288,15 @@ def convert_xio(xio_path: Path, dest_dir: Path, log, opts: dict):
     out_path = dest_dir / f"{xio_path.stem}_{fmt_tag}{hz_tag}{ch_tag}.csv"
 
     # ── 타임라인 결정 ───────────────────────────
-    if use_period:
-        # 고정 주기 타임라인: 각 슬롯마다 가장 가까운 값 1개 사용
-        period = 1.0 / save_hz
+    # HH:MM:SS 형식은 초 단위 해상도 → Hz 미설정이어도 1Hz 최근접값 사용
+    if use_period or time_fmt == "hhmmss":
+        period = 1.0 / save_hz if use_period else 1.0
         t_max = max(m["time"] for msgs in by_address.values() for m in msgs if m["time"] > 0)
         n_steps = int(t_max / period) + 1
-        log(f"  저장 주기: {save_hz}Hz  간격: {period*1000:.1f}ms  총 {n_steps}행")
+        if use_period:
+            log(f"  저장 주기: {save_hz}Hz  간격: {period*1000:.1f}ms  총 {n_steps}행")
+        else:
+            log(f"  HH:MM:SS 형식 → 1Hz 자동 적용  총 {n_steps}행")
         with open(out_path, "w", newline="", encoding=encoding) as f:
             writer = csv.writer(f)
             writer.writerow(headers)
