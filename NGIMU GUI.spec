@@ -5,7 +5,7 @@ a = Analysis(
     ['xio_to_csv_gui.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('yongbee_icon.ico', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -35,4 +35,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon='yongbee_icon.ico',
 )

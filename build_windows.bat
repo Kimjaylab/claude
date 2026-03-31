@@ -18,7 +18,7 @@ if %errorlevel% == 0 (
 
 echo Using: %PY%
 %PY% -m pip install pyinstaller
-%PY% -m PyInstaller --onefile --windowed --name "NGIMU GUI" xio_to_csv_gui.py
+%PY% -m PyInstaller --onefile --windowed --icon=yongbee_icon.ico --add-data "yongbee_icon.ico;." --name "NGIMU GUI" xio_to_csv_gui.py
 
 echo.
 echo Done! Check dist\NGIMU GUI.exe

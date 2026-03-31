@@ -399,6 +399,13 @@ class App(tk.Tk):
         super().__init__()
         self.title("NGIMU XIO to CSV Converter v3.0")
         self.resizable(True, False)
+        # 창 아이콘 설정 (PyInstaller 패키징 포함)
+        try:
+            base = getattr(sys, '_MEIPASS', Path(__file__).parent)
+            icon_path = str(Path(base) / "yongbee_icon.ico")
+            self.iconbitmap(icon_path)
+        except Exception:
+            pass
         self._input_paths = []
         self._build_ui()
         self._center()
