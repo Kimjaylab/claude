@@ -329,10 +329,11 @@ def convert_xio(xio_path: Path, dest_dir: Path, log, opts: dict):
         if addr in by_address and addr in enabled_ch
     ]
     has_gps = bool(gps_msgs) and (GPS_ADDRESS in enabled_ch)
+    gps_col_enabled = GPS_ADDRESS in enabled_ch  # 체크박스 켜짐 여부
 
     # 시간 헤더
     time_header = "Time (ms)" if time_fmt == "tick_ms" else "Time (HH:MM:SS)"
-    gps_headers = ["Latitude", "Longitude"] if has_gps else []
+    gps_headers = ["Latitude", "Longitude"] if gps_col_enabled else []
     headers = [time_header] + gps_headers + [c for _, cols in col_specs for c in cols]
 
     # 출력 파일명: 시간 형식 + 저장 주기 포함 (중복 방지)
@@ -373,10 +374,13 @@ def convert_xio(xio_path: Path, dest_dir: Path, log, opts: dict):
                 row = [_fmt_time(t, time_fmt)]
 
                 # GPS
-                if has_gps:
-                    args = _find_closest(gps_msgs, t)
-                    row += ([f"{args[0]:.7f}", f"{args[1]:.7f}"]
-                            if args and len(args) >= 2 else ["", ""])
+                if gps_col_enabled:
+                    if has_gps:
+                        args = _find_closest(gps_msgs, t)
+                        row += ([f"{args[0]:.7f}", f"{args[1]:.7f}"]
+                                if args and len(args) >= 2 else ["", ""])
+                    else:
+                        row += ["", ""]
 
                 # 센서
                 for addr, cols in col_specs:
@@ -413,13 +417,16 @@ def convert_xio(xio_path: Path, dest_dir: Path, log, opts: dict):
                 row = [_fmt_time(t, time_fmt)]
 
                 # GPS
-                if has_gps:
-                    if primary_is_gps and len(msg["args"]) >= 2:
-                        row += [f"{msg['args'][0]:.7f}", f"{msg['args'][1]:.7f}"]
+                if gps_col_enabled:
+                    if has_gps:
+                        if primary_is_gps and len(msg["args"]) >= 2:
+                            row += [f"{msg['args'][0]:.7f}", f"{msg['args'][1]:.7f}"]
+                        else:
+                            args = _forward_fill(gps_msgs, t)
+                            row += ([f"{args[0]:.7f}", f"{args[1]:.7f}"]
+                                    if args and len(args) >= 2 else ["", ""])
                     else:
-                        args = _forward_fill(gps_msgs, t)
-                        row += ([f"{args[0]:.7f}", f"{args[1]:.7f}"]
-                                if args and len(args) >= 2 else ["", ""])
+                        row += ["", ""]
 
                 # 센서 (forward-fill)
                 for addr, cols in col_specs:
