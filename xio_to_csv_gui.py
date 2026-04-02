@@ -612,8 +612,9 @@ def _nmea_to_decimal(value: str, direction: str) -> float | None:
 
 def _extract_gps_from_nmea(auxserial_msgs: list) -> list:
     """
-    /auxserial 메시지에서 NMEA GPS 위도/경도 추출.
+    /auxserial 메시지에서 NMEA GPS 위도/경도/고도 추출.
     args[0] = 완전한 NMEA 문자열 (예: '$GNRMC,055301.00,A,3723.12,N,12658.34,E,...\r\n')
+    반환 args = [lat, lon, alt_or_None]
     """
     gps_msgs = []
     for msg in auxserial_msgs:
@@ -621,7 +622,6 @@ def _extract_gps_from_nmea(auxserial_msgs: list) -> list:
         if not args or not isinstance(args[0], str):
             continue
         sentence = args[0].strip()
-        # 체크섬 제거
         if "*" in sentence:
             sentence = sentence[:sentence.index("*")]
         fields = sentence.split(",")
@@ -629,23 +629,27 @@ def _extract_gps_from_nmea(auxserial_msgs: list) -> list:
             continue
         tag = fields[0].upper()
 
-        # $GPRMC / $GNRMC: [type, hhmmss, A/V, lat, NS, lon, EW, ...]
+        # $GPRMC / $GNRMC: 위도/경도만 있음, 고도 없음
         if tag in ("$GPRMC", "$GNRMC") and len(fields) >= 7:
-            if fields[2].upper() != "A":   # A=유효, V=무효
+            if fields[2].upper() != "A":
                 continue
             lat = _nmea_to_decimal(fields[3], fields[4].upper())
             lon = _nmea_to_decimal(fields[5], fields[6].upper())
             if lat is not None and lon is not None:
-                gps_msgs.append({"time": msg["time"], "args": [lat, lon]})
+                gps_msgs.append({"time": msg["time"], "args": [lat, lon, None]})
 
-        # $GPGGA / $GNGGA: [type, hhmmss, lat, NS, lon, EW, fix, ...]
-        elif tag in ("$GPGGA", "$GNGGA") and len(fields) >= 7:
-            if fields[6] == "0":           # fix quality 0 = 수신 안됨
+        # $GPGGA / $GNGGA: 위도/경도 + 고도(fields[9], MSL m)
+        elif tag in ("$GPGGA", "$GNGGA") and len(fields) >= 10:
+            if fields[6] == "0":
                 continue
             lat = _nmea_to_decimal(fields[2], fields[3].upper())
             lon = _nmea_to_decimal(fields[4], fields[5].upper())
+            try:
+                alt = float(fields[9]) if fields[9] else None
+            except ValueError:
+                alt = None
             if lat is not None and lon is not None:
-                gps_msgs.append({"time": msg["time"], "args": [lat, lon]})
+                gps_msgs.append({"time": msg["time"], "args": [lat, lon, alt]})
 
     return gps_msgs
 
@@ -790,7 +794,7 @@ def convert_xio(xio_path: Path, dest_dir: Path, log, opts: dict):
 
     # 시간 헤더
     time_header = "Time (ms)" if time_fmt == "tick_ms" else "Time (HH:MM:SS)"
-    gps_headers = ["Latitude", "Longitude"] if gps_col_enabled else []
+    gps_headers = ["Latitude", "Longitude", "Altitude (m)"] if gps_col_enabled else []
     headers = [time_header] + gps_headers + [c for _, cols in col_specs for c in cols]
 
     # 출력 파일명: 시간 형식 + 저장 주기 포함 (중복 방지)
@@ -834,10 +838,13 @@ def convert_xio(xio_path: Path, dest_dir: Path, log, opts: dict):
                 if gps_col_enabled:
                     if has_gps:
                         args = _find_closest(gps_msgs, t)
-                        row += ([f"{args[0]:.7f}", f"{args[1]:.7f}"]
-                                if args and len(args) >= 2 else ["", ""])
+                        if args and len(args) >= 2:
+                            alt = f"{args[2]:.2f}" if len(args) >= 3 and args[2] is not None else ""
+                            row += [f"{args[0]:.7f}", f"{args[1]:.7f}", alt]
+                        else:
+                            row += ["", "", ""]
                     else:
-                        row += ["", ""]
+                        row += ["", "", ""]
 
                 # 센서
                 for addr, cols in col_specs:
@@ -877,13 +884,18 @@ def convert_xio(xio_path: Path, dest_dir: Path, log, opts: dict):
                 if gps_col_enabled:
                     if has_gps:
                         if primary_is_gps and len(msg["args"]) >= 2:
-                            row += [f"{msg['args'][0]:.7f}", f"{msg['args'][1]:.7f}"]
+                            a = msg["args"]
+                            alt = f"{a[2]:.2f}" if len(a) >= 3 and a[2] is not None else ""
+                            row += [f"{a[0]:.7f}", f"{a[1]:.7f}", alt]
                         else:
                             args = _forward_fill(gps_msgs, t)
-                            row += ([f"{args[0]:.7f}", f"{args[1]:.7f}"]
-                                    if args and len(args) >= 2 else ["", ""])
+                            if args and len(args) >= 2:
+                                alt = f"{args[2]:.2f}" if len(args) >= 3 and args[2] is not None else ""
+                                row += [f"{args[0]:.7f}", f"{args[1]:.7f}", alt]
+                            else:
+                                row += ["", "", ""]
                     else:
-                        row += ["", ""]
+                        row += ["", "", ""]
 
                 # 센서 (forward-fill)
                 for addr, cols in col_specs:
