@@ -654,6 +654,7 @@ def _extract_gps_from_nmea(auxserial_msgs: list) -> list:
     return gps_msgs
 
 WANTED_ADDRESSES = {
+    "/altitude":    ["Altitude (m)"],
     "/humidity":    ["Humidity (%)"],
     "/quaternion":  ["W", "X", "Y", "Z"],
     "/sensors":     ["Gyro X (deg/s)", "Gyro Y (deg/s)", "Gyro Z (deg/s)",
@@ -806,12 +807,13 @@ def convert_xio(xio_path: Path, dest_dir: Path, log, opts: dict):
     ALL_CH = {GPS_ADDRESS} | set(WANTED_ADDRESSES.keys())
     CH_ABBR = {
         GPS_ADDRESS:    "gps",
+        "/altitude":    "alt",
         "/sensors":     "sen",
         "/quaternion":  "quat",
         "/humidity":    "hum",
         "/temperature": "temp",
     }
-    CH_ORDER = [GPS_ADDRESS, "/sensors", "/quaternion", "/humidity", "/temperature"]
+    CH_ORDER = [GPS_ADDRESS, "/altitude", "/sensors", "/quaternion", "/humidity", "/temperature"]
     if enabled_ch >= ALL_CH:
         ch_tag = ""
     else:
@@ -1105,6 +1107,7 @@ class App(tk.Tk):
 
         CHANNELS = [
             (GPS_ADDRESS,    "GPS (Lat / Lon)"),
+            ("/altitude",    "Altitude  (Barometer)"),
             ("/sensors",     "Sensors  (Gyro / Accel / Mag)"),
             ("/quaternion",  "Quaternion  (W / X / Y / Z)"),
             ("/humidity",    "Humidity"),
