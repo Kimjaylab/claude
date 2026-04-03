@@ -22,7 +22,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='NGIMU GUI',
+    name='YB XIO to CSV Converter',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

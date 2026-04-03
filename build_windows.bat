@@ -1,6 +1,6 @@
 @echo off
 cd /d "%~dp0"
-echo Building NGIMU GUI...
+echo Building YB XIO to CSV Converter...
 
 where python >nul 2>&1
 if %errorlevel% == 0 (
@@ -19,8 +19,8 @@ if %errorlevel% == 0 (
 
 echo Using: %PY%
 %PY% -m pip install pyinstaller
-%PY% -m PyInstaller --onefile --windowed --icon=yongbee_icon.ico --add-data "yongbee_icon.ico;." --name "NGIMU GUI" xio_to_csv_gui.py
+%PY% -m PyInstaller --onefile --windowed --icon=yongbee_icon.ico --add-data "yongbee_icon.ico;." --name "YB XIO to CSV Converter" xio_to_csv_gui.py
 
 echo.
-echo Done! Check dist\NGIMU GUI.exe
+echo Done! Check dist\YB XIO to CSV Converter.exe
 pause
