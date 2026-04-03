@@ -838,7 +838,7 @@ def convert_xio(xio_path: Path, dest_dir: Path, log, opts: dict):
                 # GPS
                 if gps_col_enabled:
                     if has_gps:
-                        args = _find_closest(gps_msgs, t)
+                        args = _forward_fill(gps_msgs, t)
                         if args and len(args) >= 2:
                             if len(args) >= 3 and args[2] is not None:
                                 last_alt = f"{args[2]:.2f}"
