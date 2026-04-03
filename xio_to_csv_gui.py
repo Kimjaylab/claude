@@ -792,8 +792,11 @@ def convert_xio(xio_path: Path, dest_dir: Path, log, opts: dict):
     ]
     has_gps = bool(gps_msgs) and (GPS_ADDRESS in enabled_ch)
     gps_col_enabled = GPS_ADDRESS in enabled_ch  # 체크박스 켜짐 여부
-    # 첫 번째 유효 고도값 (AGL 기준점)
+    # 첫 번째 유효 고도값 (AGL 기준점) - GPS
     alt_base = next((m["args"][2] for m in gps_msgs if len(m["args"]) >= 3 and m["args"][2] is not None), None)
+    # 기압계 /altitude AGL 기준점
+    baro_msgs = by_address.get("/altitude", [])
+    baro_base = baro_msgs[0]["args"][0] if baro_msgs and baro_msgs[0]["args"] else None
 
     # 시간 헤더
     time_header = "Time (ms)" if time_fmt == "tick_ms" else "Time (HH:MM:SS)"
@@ -855,7 +858,10 @@ def convert_xio(xio_path: Path, dest_dir: Path, log, opts: dict):
                 # 센서
                 for addr, cols in col_specs:
                     args = _find_closest(by_address[addr], t) or []
-                    row += [str(args[k]) if k < len(args) else "" for k in range(len(cols))]
+                    if addr == "/altitude" and baro_base is not None and args:
+                        row += [f"{args[0] - baro_base:.2f}"]
+                    else:
+                        row += [str(args[k]) if k < len(args) else "" for k in range(len(cols))]
 
                 writer.writerow(row)
 
@@ -909,7 +915,10 @@ def convert_xio(xio_path: Path, dest_dir: Path, log, opts: dict):
                 # 센서 (forward-fill)
                 for addr, cols in col_specs:
                     args = _forward_fill(by_address[addr], t) or []
-                    row += [str(args[k]) if k < len(args) else "" for k in range(len(cols))]
+                    if addr == "/altitude" and baro_base is not None and args:
+                        row += [f"{args[0] - baro_base:.2f}"]
+                    else:
+                        row += [str(args[k]) if k < len(args) else "" for k in range(len(cols))]
 
                 writer.writerow(row)
 
