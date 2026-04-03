@@ -830,6 +830,7 @@ def convert_xio(xio_path: Path, dest_dir: Path, log, opts: dict):
             writer = csv.writer(f)
             writer.writerow(headers)
 
+            last_alt = ""
             for i in range(n_steps):
                 t = i * period
                 row = [_fmt_time(t, time_fmt)]
@@ -839,8 +840,9 @@ def convert_xio(xio_path: Path, dest_dir: Path, log, opts: dict):
                     if has_gps:
                         args = _find_closest(gps_msgs, t)
                         if args and len(args) >= 2:
-                            alt = f"{args[2]:.2f}" if len(args) >= 3 and args[2] is not None else ""
-                            row += [f"{args[0]:.7f}", f"{args[1]:.7f}", alt]
+                            if len(args) >= 3 and args[2] is not None:
+                                last_alt = f"{args[2]:.2f}"
+                            row += [f"{args[0]:.7f}", f"{args[1]:.7f}", last_alt]
                         else:
                             row += ["", "", ""]
                     else:
@@ -876,6 +878,7 @@ def convert_xio(xio_path: Path, dest_dir: Path, log, opts: dict):
             writer = csv.writer(f)
             writer.writerow(headers)
 
+            last_alt = ""
             for msg in primary:
                 t = msg["time"]
                 row = [_fmt_time(t, time_fmt)]
@@ -885,13 +888,15 @@ def convert_xio(xio_path: Path, dest_dir: Path, log, opts: dict):
                     if has_gps:
                         if primary_is_gps and len(msg["args"]) >= 2:
                             a = msg["args"]
-                            alt = f"{a[2]:.2f}" if len(a) >= 3 and a[2] is not None else ""
-                            row += [f"{a[0]:.7f}", f"{a[1]:.7f}", alt]
+                            if len(a) >= 3 and a[2] is not None:
+                                last_alt = f"{a[2]:.2f}"
+                            row += [f"{a[0]:.7f}", f"{a[1]:.7f}", last_alt]
                         else:
                             args = _forward_fill(gps_msgs, t)
                             if args and len(args) >= 2:
-                                alt = f"{args[2]:.2f}" if len(args) >= 3 and args[2] is not None else ""
-                                row += [f"{args[0]:.7f}", f"{args[1]:.7f}", alt]
+                                if len(args) >= 3 and args[2] is not None:
+                                    last_alt = f"{args[2]:.2f}"
+                                row += [f"{args[0]:.7f}", f"{args[1]:.7f}", last_alt]
                             else:
                                 row += ["", "", ""]
                     else:
