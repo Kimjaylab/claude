@@ -832,7 +832,7 @@ def convert_xio(xio_path: Path, dest_dir: Path, log, opts: dict):
             writer = csv.writer(f)
             writer.writerow(headers)
 
-            last_alt = ""
+            last_alt = "0.00" if alt_base is not None else ""
             for i in range(n_steps):
                 t = i * period
                 row = [_fmt_time(t, time_fmt)]
@@ -880,7 +880,7 @@ def convert_xio(xio_path: Path, dest_dir: Path, log, opts: dict):
             writer = csv.writer(f)
             writer.writerow(headers)
 
-            last_alt = ""
+            last_alt = "0.00" if alt_base is not None else ""
             for msg in primary:
                 t = msg["time"]
                 row = [_fmt_time(t, time_fmt)]
