@@ -654,7 +654,7 @@ def _extract_gps_from_nmea(auxserial_msgs: list) -> list:
     return gps_msgs
 
 WANTED_ADDRESSES = {
-    "/altitude":    ["Altitude (m)"],
+    "/altitude":    ["Baro Altitude (m)"],
     "/humidity":    ["Humidity (%)"],
     "/quaternion":  ["W", "X", "Y", "Z"],
     "/sensors":     ["Gyro X (deg/s)", "Gyro Y (deg/s)", "Gyro Z (deg/s)",
@@ -800,7 +800,7 @@ def convert_xio(xio_path: Path, dest_dir: Path, log, opts: dict):
 
     # 시간 헤더
     time_header = "Time (ms)" if time_fmt == "tick_ms" else "Time (HH:MM:SS)"
-    gps_headers = ["Latitude", "Longitude", "Altitude (m)"] if gps_col_enabled else []
+    gps_headers = ["Latitude", "Longitude", "GPS Altitude (m)"] if gps_col_enabled else []
     headers = [time_header] + gps_headers + [c for _, cols in col_specs for c in cols]
 
     # 출력 파일명: 시간 형식 + 저장 주기 포함 (중복 방지)
