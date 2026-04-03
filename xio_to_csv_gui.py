@@ -950,7 +950,14 @@ class App(tk.Tk):
         super().__init__()
         self.title("YB XIO to CSV Converter v1.0")
         self.resizable(True, False)
-        # 아이콘 적용 (내장 base64 → 임시 파일 → iconbitmap)
+        # 아이콘 적용 (내장 base64 → 임시 파일 → iconbitmap + 작업표시줄)
+        try:
+            import base64, tempfile, os, ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                'YB.XIO.CSV.Converter.v1'
+            )
+        except Exception:
+            pass
         try:
             import base64, tempfile, os
             ico_data = base64.b64decode(YONGBEE_ICON_B64)
