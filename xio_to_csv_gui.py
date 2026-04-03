@@ -831,7 +831,6 @@ def convert_xio(xio_path: Path, dest_dir: Path, log, opts: dict):
             writer.writerow(headers)
 
             last_alt = ""
-            last_displayed_alt = ""
             for i in range(n_steps):
                 t = i * period
                 row = [_fmt_time(t, time_fmt)]
@@ -843,10 +842,7 @@ def convert_xio(xio_path: Path, dest_dir: Path, log, opts: dict):
                         if args and len(args) >= 2:
                             if len(args) >= 3 and args[2] is not None:
                                 last_alt = f"{args[2]:.2f}"
-                            alt_cell = last_alt if last_alt != last_displayed_alt else ""
-                            if last_alt:
-                                last_displayed_alt = last_alt
-                            row += [f"{args[0]:.7f}", f"{args[1]:.7f}", alt_cell]
+                            row += [f"{args[0]:.7f}", f"{args[1]:.7f}", last_alt]
                         else:
                             row += ["", "", ""]
                     else:
@@ -883,7 +879,6 @@ def convert_xio(xio_path: Path, dest_dir: Path, log, opts: dict):
             writer.writerow(headers)
 
             last_alt = ""
-            last_displayed_alt = ""
             for msg in primary:
                 t = msg["time"]
                 row = [_fmt_time(t, time_fmt)]
@@ -895,19 +890,13 @@ def convert_xio(xio_path: Path, dest_dir: Path, log, opts: dict):
                             a = msg["args"]
                             if len(a) >= 3 and a[2] is not None:
                                 last_alt = f"{a[2]:.2f}"
-                            alt_cell = last_alt if last_alt != last_displayed_alt else ""
-                            if last_alt:
-                                last_displayed_alt = last_alt
-                            row += [f"{a[0]:.7f}", f"{a[1]:.7f}", alt_cell]
+                            row += [f"{a[0]:.7f}", f"{a[1]:.7f}", last_alt]
                         else:
                             args = _forward_fill(gps_msgs, t)
                             if args and len(args) >= 2:
                                 if len(args) >= 3 and args[2] is not None:
                                     last_alt = f"{args[2]:.2f}"
-                                alt_cell = last_alt if last_alt != last_displayed_alt else ""
-                                if last_alt:
-                                    last_displayed_alt = last_alt
-                                row += [f"{args[0]:.7f}", f"{args[1]:.7f}", alt_cell]
+                                row += [f"{args[0]:.7f}", f"{args[1]:.7f}", last_alt]
                             else:
                                 row += ["", "", ""]
                     else:
