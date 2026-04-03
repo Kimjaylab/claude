@@ -791,6 +791,8 @@ def convert_xio(xio_path: Path, dest_dir: Path, log, opts: dict):
     ]
     has_gps = bool(gps_msgs) and (GPS_ADDRESS in enabled_ch)
     gps_col_enabled = GPS_ADDRESS in enabled_ch  # 체크박스 켜짐 여부
+    # 첫 번째 유효 고도값 (AGL 기준점)
+    alt_base = next((m["args"][2] for m in gps_msgs if len(m["args"]) >= 3 and m["args"][2] is not None), None)
 
     # 시간 헤더
     time_header = "Time (ms)" if time_fmt == "tick_ms" else "Time (HH:MM:SS)"
@@ -840,8 +842,8 @@ def convert_xio(xio_path: Path, dest_dir: Path, log, opts: dict):
                     if has_gps:
                         args = _forward_fill(gps_msgs, t)
                         if args and len(args) >= 2:
-                            if len(args) >= 3 and args[2] is not None:
-                                last_alt = f"{args[2]:.2f}"
+                            if len(args) >= 3 and args[2] is not None and alt_base is not None:
+                                last_alt = f"{args[2] - alt_base:.2f}"
                             row += [f"{args[0]:.7f}", f"{args[1]:.7f}", last_alt]
                         else:
                             row += ["", "", ""]
@@ -888,14 +890,14 @@ def convert_xio(xio_path: Path, dest_dir: Path, log, opts: dict):
                     if has_gps:
                         if primary_is_gps and len(msg["args"]) >= 2:
                             a = msg["args"]
-                            if len(a) >= 3 and a[2] is not None:
-                                last_alt = f"{a[2]:.2f}"
+                            if len(a) >= 3 and a[2] is not None and alt_base is not None:
+                                last_alt = f"{a[2] - alt_base:.2f}"
                             row += [f"{a[0]:.7f}", f"{a[1]:.7f}", last_alt]
                         else:
                             args = _forward_fill(gps_msgs, t)
                             if args and len(args) >= 2:
-                                if len(args) >= 3 and args[2] is not None:
-                                    last_alt = f"{args[2]:.2f}"
+                                if len(args) >= 3 and args[2] is not None and alt_base is not None:
+                                    last_alt = f"{args[2] - alt_base:.2f}"
                                 row += [f"{args[0]:.7f}", f"{args[1]:.7f}", last_alt]
                             else:
                                 row += ["", "", ""]
