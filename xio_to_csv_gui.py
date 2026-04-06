@@ -660,7 +660,7 @@ WANTED_ADDRESSES = {
     "/sensors":     ["Gyro X (deg/s)", "Gyro Y (deg/s)", "Gyro Z (deg/s)",
                      "Accel X (g)",   "Accel Y (g)",    "Accel Z (g)",
                      "Mag X (uT)",    "Mag Y (uT)",     "Mag Z (uT)"],
-    "/temperature": ["Temperature (°C)"],
+    "/temperature": ["Temperature Env (°C)", "Temperature IMU (°C)"],
 }
 
 
