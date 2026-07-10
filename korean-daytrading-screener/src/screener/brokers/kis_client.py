@@ -17,6 +17,7 @@ PAPER_DOMAIN = "https://openapivts.koreainvestment.com:29443"
 TR_ID = {
     "current_price": "FHKST01010100",
     "order_book": "FHKST01010200",
+    "execution_detail": "FHKST01010300",  # 주식현재가 체결 - 체결강도 확인용
     "daily_chart": "FHKST03010100",
     "minute_chart": "FHKST03010200",
     "volume_rank": "FHPST01710000",
