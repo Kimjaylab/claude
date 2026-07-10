@@ -3,3 +3,14 @@ dist/
 __pycache__/
 *.pyc
 *.pyo
+
+# korean-daytrading-screener
+korean-daytrading-screener/.env
+korean-daytrading-screener/data/*
+!korean-daytrading-screener/data/.gitkeep
+korean-daytrading-screener/logs/*
+!korean-daytrading-screener/logs/.gitkeep
+korean-daytrading-screener/.venv/
+korean-daytrading-screener/*.egg-info/
+korean-daytrading-screener/src/*.egg-info/
+korean-daytrading-screener/.kis_token_cache.json

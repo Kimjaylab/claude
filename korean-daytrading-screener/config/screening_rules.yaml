@@ -1,0 +1,59 @@
+# 스코어링 가중치 및 임계값
+# 백테스트 최적화기(backtest/optimizer.py)가 이 파일을 갱신 대상으로 삼는다.
+# 각 category의 max_points 합은 100이 되도록 유지한다.
+
+weights:
+  volume_momentum:
+    max_points: 25
+    ideal_ratio_min: 3.0        # 최근 20일 동시간대 평균 대비 이상적 거래량 배수 하한
+    ideal_ratio_max: 10.0       # 이 배수를 넘으면 감점 시작(뒷북 진입 리스크)
+    over_ratio_penalty_per_x: 1.5
+
+  trend_alignment:
+    max_points: 15              # 종가>5일선>20일선>60일선 정배열 정도
+
+  breakout:
+    max_points: 20
+    lookback_days: 20
+    volume_confirmation_bonus: 5  # 돌파 시점 거래량 동반 시 가산
+
+  execution_strength:
+    max_points: 15              # 체결강도 + 매수/매도 잔량 비율
+
+  relative_strength:
+    max_points: 10              # 개별 종목 등락률 - 지수(코스피/코스닥) 등락률
+
+  gap_quality:
+    max_points: 5
+    sweet_spot_max_pct: 4.0
+    half_score_max_pct: 8.0
+    hard_cut_pct: 15.0
+    excessive_gap_penalty: -10
+
+  news_disclosure:
+    max_points: 10
+    positive_keywords:
+      - "계약체결"
+      - "수주"
+      - "공급계약"
+      - "실적개선"
+      - "흑자전환"
+      - "자사주매입"
+      - "무상증자"
+      - "특허"
+      - "신규사업"
+
+  overheat_penalty:
+    max_points: -10
+    rsi_threshold: 80
+    three_day_return_threshold_pct: 25
+
+risk_grade:
+  low_atr_pct: 3.0
+  medium_atr_pct: 6.0
+  # ATR% > medium_atr_pct 이면 위험도 '고'
+
+targets:
+  stop_loss_atr_multiple: 1.2
+  target1_risk_reward: 1.5
+  target2_risk_reward: 2.5

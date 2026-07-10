@@ -1,0 +1,28 @@
+# 일반 운영 설정
+schedule:
+  static_filter_time: "08:40"   # 정적 필터(전일 데이터 기반) 실행 시각
+  dynamic_scan_start: "09:00"   # 동적 필터 시작 (동시호가 종료 직후)
+  send_time: "09:05"            # 텔레그램 발송 시각
+  timezone: "Asia/Seoul"
+
+notification:
+  max_candidates: 7              # 하루 최대 발송 종목 수
+  min_score_to_send: 65          # 이 점수 미만이면 후보가 있어도 발송하지 않음
+
+universe:
+  min_market_cap_krw: 50_000_000_000      # 시가총액 500억 이상
+  min_prev_day_trading_value_krw: 5_000_000_000  # 전일 거래대금 50억 이상
+  min_today_cumulative_value_krw: 300_000_000    # 09:05 누적 거래대금 3억 이상
+  min_listed_days: 20              # 상장 20거래일 미만 제외
+  exclude_market_warning: true     # 관리종목/투자주의·경고·위험 제외
+  exclude_etf_etn_spac_reit: true
+  exclude_preferred_stock: true
+
+market_regime:
+  crash_index_change_pct: -1.5     # 코스피·코스닥 등락률이 이보다 낮으면 "위험장"으로 간주
+  crash_max_candidates: 3          # 위험장일 때 발송 종목 수 상한
+  crash_score_multiplier: 0.75
+
+logging:
+  level: INFO
+  retention_days: 90
