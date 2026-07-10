@@ -140,9 +140,6 @@ class KISClient(BrokerClient):
             {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code},
         )
         d = body["output"]
-        buy_sum = float(d.get("shnu_cntg_smtn", 0))
-        sell_sum = float(d.get("seln_cntg_smtn", 0))
-        buy_execution_ratio = (buy_sum / sell_sum * 100) if sell_sum else 100.0
         return Quote(
             code=code,
             name=d.get("hts_kor_isnm", ""),
@@ -154,8 +151,23 @@ class KISClient(BrokerClient):
             volume=int(d["acml_vol"]),
             trading_value=float(d["acml_tr_pbmn"]),
             market_cap=float(d.get("hts_avls", 0)) * 100_000_000,
-            buy_execution_ratio=buy_execution_ratio,
+            buy_execution_ratio=self._get_execution_strength(code),
         )
+
+    def _get_execution_strength(self, code: str) -> float:
+        # inquire-price에는 체결강도 필드가 없어 별도 API(체결 내역)에서 가져온다.
+        # tday_rltv: 당일 누적 매수/매도 체결강도(100 기준, >100이면 매수세 우위).
+        try:
+            body = self._get(
+                "/uapi/domestic-stock/v1/quotations/inquire-ccnl",
+                TR_ID["execution_detail"],
+                {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code},
+            )
+            rows = body.get("output") or []
+            return float(rows[0]["tday_rltv"]) if rows else 100.0
+        except Exception as exc:
+            logger.warning(f"{code} 체결강도 조회 실패, 중립값(100)으로 대체: {exc}")
+            return 100.0
 
     def get_order_book(self, code: str) -> OrderBook:
         body = self._get(
