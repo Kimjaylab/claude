@@ -216,6 +216,7 @@ class KISClient(BrokerClient):
                 "FID_INPUT_ISCD": code,
                 "FID_INPUT_HOUR_1": "090000",
                 "FID_PW_DATA_INCU_YN": "Y",
+                "FID_ETC_CLS_CODE": "",
             },
         )
         return [
@@ -267,6 +268,10 @@ class KISClient(BrokerClient):
                 "FID_PRC_CLS_CODE": "0",
                 "FID_TRGT_CLS_CODE": "0",
                 "FID_TRGT_EXLS_CLS_CODE": "0",
+                "FID_INPUT_PRICE_1": "",
+                "FID_INPUT_PRICE_2": "",
+                "FID_VOL_CNT": "",
+                "FID_TRGT_CLS_CODE_2": "",
             },
         )
         return [
@@ -303,6 +308,9 @@ class KISClient(BrokerClient):
             for i, row in enumerate(rows[:top_n])
         ]
 
+    # 실제 응답에서 등락률 필드명이 확인되지 않아, 후보 필드명 중 존재하는 것을 사용한다.
+    _INDEX_CHANGE_FIELD_CANDIDATES = ("prdy_ctrt", "bstp_nmix_prdy_ctrt", "prdy_vrss_ctrt")
+
     def get_index_change_pct(self, market: str) -> float:
         code = "0001" if market == "KOSPI" else "1001"
         body = self._get(
@@ -310,7 +318,13 @@ class KISClient(BrokerClient):
             "FHPUP02100000",
             {"FID_COND_MRKT_DIV_CODE": "U", "FID_INPUT_ISCD": code},
         )
-        return float(body["output"]["prdy_ctrt"])
+        output = body["output"]
+        for field in self._INDEX_CHANGE_FIELD_CANDIDATES:
+            if field in output:
+                return float(output[field])
+        raise KeyError(
+            f"지수 등락률 필드를 찾지 못함. 실제 응답 필드: {list(output.keys())}"
+        )
 
     def is_market_holiday(self, day: date) -> bool:
         body = self._get(
