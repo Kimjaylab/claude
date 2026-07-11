@@ -1,4 +1,5 @@
 import json
+import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -39,6 +40,7 @@ class KISClient(BrokerClient):
         account_product_cd: str = "01",
         env: str = "paper",
         token_cache_path: Path | None = None,
+        min_request_interval: float = 0.15,
     ):
         self.app_key = app_key
         self.app_secret = app_secret
@@ -50,6 +52,10 @@ class KISClient(BrokerClient):
         self._access_token: str | None = None
         self._token_expires_at: datetime | None = None
         self._session = requests.Session()
+        # KIS는 초당 호출 횟수 제한이 있어, 백테스트처럼 수백 종목을 연속 조회할 때
+        # 제한에 걸려 계속 실패하는 걸 막기 위해 호출 사이 최소 간격을 둔다(초당 약 6~7회).
+        self._min_request_interval = min_request_interval
+        self._last_request_at = 0.0
 
     def is_ready(self) -> bool:
         try:
@@ -121,8 +127,16 @@ class KISClient(BrokerClient):
             "custtype": self.custtype,
         }
 
+    def _throttle(self) -> None:
+        elapsed = time.monotonic() - self._last_request_at
+        wait = self._min_request_interval - elapsed
+        if wait > 0:
+            time.sleep(wait)
+        self._last_request_at = time.monotonic()
+
     @with_retry(exceptions=(requests.RequestException,))
     def _get(self, path: str, tr_id: str, params: dict) -> dict:
+        self._throttle()
         resp = self._session.get(
             f"{self.domain}{path}", headers=self._headers(tr_id), params=params, timeout=10
         )
