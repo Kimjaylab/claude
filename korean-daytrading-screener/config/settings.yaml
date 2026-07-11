@@ -26,3 +26,14 @@ market_regime:
 logging:
   level: INFO
   retention_days: 90
+
+backtest:
+  universe_size_per_market: 300       # 라이브 유니버스 필터 통과 종목 중 유동성 상위 N개 (KOSPI/KOSDAQ 각각)
+  lookback_years: 4
+  out_of_sample_ratio: 0.25           # 최근 25%는 검증용, 절대 최적화에 쓰지 않음
+  round_trip_cost_pct: 0.25           # 수수료+거래세 왕복 근사치 (증권사/시장에 따라 조정 필요)
+  stop_slippage_pct: 0.10             # 손절 체결 시 추가 슬리피지 가정
+  target_slippage_pct: 0.05           # 익절 체결 시 추가 슬리피지 가정
+  position_weight: 1.0                # max_candidates로 나눠 종목당 비중 계산 (1.0 = 균등비중 총합 100%)
+  uptrend_index_change_pct: 0.5       # 이 이상이면 "상승장"으로 분류
+  min_trades_per_bucket: 10           # 이보다 적은 표본의 점수구간은 통계 신뢰 불가로 표시

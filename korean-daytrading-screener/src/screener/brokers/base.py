@@ -71,6 +71,9 @@ class BrokerClient(ABC):
     def get_daily_candles(self, code: str, start: date, end: date) -> list[Candle]: ...
 
     @abstractmethod
+    def get_index_daily_candles(self, market: str, start: date, end: date) -> list[Candle]: ...
+
+    @abstractmethod
     def get_today_minute_candles(self, code: str) -> list[Candle]: ...
 
     @abstractmethod

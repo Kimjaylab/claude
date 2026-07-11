@@ -49,13 +49,16 @@ class DartClient:
         with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
             cache_path.write_bytes(zf.read("CORPCODE.xml"))
 
-    @with_retry(exceptions=(requests.RequestException,))
     def get_recent_disclosures(self, stock_code: str, days: int = 2) -> list[Disclosure]:
+        return self.get_recent_disclosures_as_of(stock_code, date.today(), days=days)
+
+    @with_retry(exceptions=(requests.RequestException,))
+    def get_recent_disclosures_as_of(self, stock_code: str, end: date, days: int = 2) -> list[Disclosure]:
+        """end일 기준 최근 days일간의 공시. 백테스트에서 룩어헤드를 피하려면 end를 D-1로 넘긴다."""
         corp_code = self._stock_to_corp.get(stock_code)
         if not corp_code:
             return []
 
-        end = date.today()
         start = end - timedelta(days=days)
         resp = requests.get(
             DART_BASE + "/list.json",

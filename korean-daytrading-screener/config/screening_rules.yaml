@@ -57,3 +57,4 @@ targets:
   stop_loss_atr_multiple: 1.2
   target1_risk_reward: 1.5
   target2_risk_reward: 2.5
+  price_limit_pct: 30.0  # 코스피/코스닥 당일 가격제한폭

@@ -3,6 +3,7 @@ from screener.brokers.base import BrokerClient
 from screener.config import PROJECT_ROOT
 from screener.data.news_dart import DartClient
 from screener.data.ohlcv_store import OHLCVStore
+from screener.data.snapshot_logger import log_snapshot
 from screener.data.universe import UniverseFilter
 from screener.screening.dynamic_filters import build_dynamic_candidates
 from screener.screening.models import Candidate
@@ -94,6 +95,11 @@ def run_pipeline(
                 adjusted_total=adjusted_total,
             )
             all_candidates.append(candidate)
+
+    try:
+        log_snapshot(all_candidates, PROJECT_ROOT / "data" / "live_snapshots")
+    except Exception as exc:
+        logger.warning(f"스냅샷 로그 저장 실패(파이프라인 결과에는 영향 없음): {exc}")
 
     regime_note = _build_regime_note(index_change_by_market, settings["market_regime"])
     max_candidates = settings["market_regime"]["crash_max_candidates"] if regime_note else settings["notification"]["max_candidates"]

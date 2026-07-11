@@ -24,6 +24,7 @@ TR_ID = {
     "fluctuation_rank": "FHPST01700000",
     "trading_value_rank": "FHPST01710000",
     "holiday_check": "CTCA0903R",
+    "index_daily_chart": "FHKUP03500100",  # 국내업종 기간별시세 - 미검증, 실패 시 debug 스크립트로 확인 필요
 }
 
 MARKET_CODE = {"KOSPI": "0001", "KOSDAQ": "1001"}
@@ -206,6 +207,38 @@ class KISClient(BrokerClient):
             )
             for row in body["output2"]
         ]
+
+    def get_index_daily_candles(self, market: str, start: date, end: date) -> list[Candle]:
+        """백테스트의 상대강도 계산용 지수(코스피/코스닥) 일봉. TR_ID/필드명 미검증."""
+        code = MARKET_CODE[market]
+        body = self._get(
+            "/uapi/domestic-stock/v1/quotations/inquire-daily-indexchartprice",
+            TR_ID["index_daily_chart"],
+            {
+                "FID_COND_MRKT_DIV_CODE": "U",
+                "FID_INPUT_ISCD": code,
+                "FID_INPUT_DATE_1": start.strftime("%Y%m%d"),
+                "FID_INPUT_DATE_2": end.strftime("%Y%m%d"),
+                "FID_PERIOD_DIV_CODE": "D",
+            },
+        )
+        rows = body.get("output2") or []
+        candles = []
+        for row in rows:
+            try:
+                candles.append(
+                    Candle(
+                        timestamp=row.get("stck_bsop_date", ""),
+                        open=float(row.get("bstp_nmix_oprc", row.get("stck_oprc", 0))),
+                        high=float(row.get("bstp_nmix_hgpr", row.get("stck_hgpr", 0))),
+                        low=float(row.get("bstp_nmix_lwpr", row.get("stck_lwpr", 0))),
+                        close=float(row.get("bstp_nmix_prpr", row.get("stck_clpr", 0))),
+                        volume=int(row.get("acml_vol", 0)),
+                    )
+                )
+            except (TypeError, ValueError):
+                continue
+        return candles
 
     def get_today_minute_candles(self, code: str) -> list[Candle]:
         body = self._get(

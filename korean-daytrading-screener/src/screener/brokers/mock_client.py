@@ -66,6 +66,9 @@ class MockClient(BrokerClient):
             current += timedelta(days=1)
         return candles
 
+    def get_index_daily_candles(self, market: str, start: date, end: date) -> list[Candle]:
+        return self.get_daily_candles(market, start, end)
+
     def get_today_minute_candles(self, code: str) -> list[Candle]:
         candles = []
         price = self._rng.uniform(5_000, 80_000)
