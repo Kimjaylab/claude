@@ -30,6 +30,10 @@ def build_backtest_universe(
     """
     universe_size = settings["backtest"]["universe_size_per_market"]
     min_market_cap = settings["universe"]["min_market_cap_krw"]
+    # 현재가 조회 API가 (주말 점검 등으로) 통째로 막혀 있으면 종목마다 재시도로 몇 시간을
+    # 날리는 대신, 연속 실패가 임계치를 넘는 순간 시총 확인을 포기하고 나머지는
+    # 유동성(거래대금순위) 기준만으로 통과시킨다.
+    consecutive_failure_limit = 5
 
     result: list[tuple[str, str, str]] = []
     for market in MARKETS:
@@ -40,19 +44,41 @@ def build_backtest_universe(
             continue
 
         kept = 0
+        skipped_cap_check = 0
+        consecutive_failures = 0
+        quote_api_down = False
         for item in candidates:
             if not universe.is_investable(item.code, item.name):
                 continue
+
+            if quote_api_down:
+                result.append((item.code, item.name, market))
+                kept += 1
+                skipped_cap_check += 1
+                continue
+
             try:
                 quote = broker.get_quote(item.code)
+                consecutive_failures = 0
             except Exception as exc:
-                logger.warning(f"{item.code} 시총 확인 실패, 제외: {exc}")
+                consecutive_failures += 1
+                if consecutive_failures >= consecutive_failure_limit:
+                    logger.warning(
+                        f"[{market}] 현재가 조회 API가 응답하지 않아(연속 {consecutive_failures}회 실패) "
+                        f"시총 확인을 생략하고 거래대금순위만으로 유니버스를 구성합니다: {exc}"
+                    )
+                    quote_api_down = True
+                    result.append((item.code, item.name, market))
+                    kept += 1
+                    skipped_cap_check += 1
                 continue
+
             if quote.market_cap < min_market_cap:
                 continue
             result.append((item.code, item.name, market))
             kept += 1
-        logger.info(f"[{market}] 백테스트 유니버스: {kept}/{len(candidates)}종목 통과")
+        note = f" (시총 미확인 {skipped_cap_check}건 포함)" if skipped_cap_check else ""
+        logger.info(f"[{market}] 백테스트 유니버스: {kept}/{len(candidates)}종목 통과{note}")
     return result
 
 
