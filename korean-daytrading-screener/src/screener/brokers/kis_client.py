@@ -272,6 +272,7 @@ class KISClient(BrokerClient):
                 "FID_INPUT_PRICE_2": "",
                 "FID_VOL_CNT": "",
                 "FID_TRGT_CLS_CODE_2": "",
+                "FID_DIV_CLS_CODE": "0",
             },
         )
         return [
