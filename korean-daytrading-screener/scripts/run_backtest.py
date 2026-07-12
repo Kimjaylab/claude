@@ -64,9 +64,16 @@ def main() -> None:
 
     _save_trades_csv(trades, PROJECT_ROOT / "data" / "backtest_trades.csv")
 
-    min_score = settings["notification"]["min_score_to_send"]
-    for score_field, label in [("score_honest", "HONEST (룩어헤드 없음, 신뢰 가능)"), ("score_reference", "REFERENCE (거래량 포함, 상한선 참고용)")]:
-        print(f"\n{'=' * 60}\n{label}\n{'=' * 60}")
+    live_min_score = settings["notification"]["min_score_to_send"]
+    # honest 점수는 거래량(25점)+체결강도(15점)가 구조적으로 0점 처리되어 이론상
+    # 최고점이 약 60점이라, 라이브 발송 기준(65점)을 그대로 적용하면 항상 0건이 된다.
+    # 전체 분포를 점수 구간별로 보기 위해 문턱 없이(0점) 돌리고, reference만 실전 기준을 적용한다.
+    score_configs = [
+        ("score_honest", "HONEST (룩어헤드 없음, 신뢰 가능)", 0),
+        ("score_reference", "REFERENCE (거래량 포함, 상한선 참고용)", live_min_score),
+    ]
+    for score_field, label, min_score in score_configs:
+        print(f"\n{'=' * 60}\n{label} - 발송 기준 {min_score}점 이상\n{'=' * 60}")
         for split in ("in_sample", "out_of_sample"):
             split_trades = [t for t in trades if t.split == split]
             report = build_report(split_trades, score_field, min_score, settings)

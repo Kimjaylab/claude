@@ -37,10 +37,17 @@ def build_backtest_universe(
 
     result: list[tuple[str, str, str]] = []
     for market in MARKETS:
-        try:
-            candidates = broker.get_trading_value_rank(market, top_n=universe_size)
-        except Exception as exc:
-            logger.warning(f"[{market}] 백테스트 유니버스 조회 실패: {exc}")
+        # 순위 API 1개는 한 번에 30개 안팎만 반환해(페이지네이션 미구현) 3종류를 합쳐 폭을 넓힌다.
+        candidates_by_code: dict[str, object] = {}
+        for ranker in (broker.get_trading_value_rank, broker.get_volume_rank, broker.get_fluctuation_rank):
+            try:
+                for item in ranker(market, top_n=universe_size):
+                    candidates_by_code[item.code] = item
+            except Exception as exc:
+                logger.warning(f"[{market}] {ranker.__name__} 조회 실패: {exc}")
+        candidates = list(candidates_by_code.values())
+        if not candidates:
+            logger.warning(f"[{market}] 백테스트 유니버스 조회 실패: 순위 API 전부 실패")
             continue
 
         kept = 0
