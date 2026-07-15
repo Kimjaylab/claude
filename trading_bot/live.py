@@ -94,8 +94,10 @@ class LiveTrader:
             logger.exception("잔고 조회 실패, 이번 스캔은 건너뜁니다")
             return
 
-        logger.info("전종목 스캔 시작: %d개 종목", len(targets))
+        logger.info("전종목 스캔 시작: %d개 종목 (최초 실행은 종목별 과거데이터를 처음 받아오느라 "
+                    "오래 걸릴 수 있습니다)", len(targets))
         checked = 0
+        total = len(targets)
         for symbol, exchange in targets:
             if self.portfolio.has_position(symbol):
                 continue
@@ -114,6 +116,8 @@ class LiveTrader:
                 continue
             finally:
                 checked += 1
+                if checked % 25 == 0:
+                    logger.info("스캔 진행 중: %d/%d 종목 확인", checked, total)
 
             if not signal.buy:
                 logger.debug("%s 매수신호 없음: %s", symbol, signal.reasons)

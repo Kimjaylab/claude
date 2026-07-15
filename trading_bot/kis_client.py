@@ -32,6 +32,11 @@ TR_DAILY_PRICE = "HHDFS76240000"
 
 _TOKEN_CACHE_FILE = Path(".kis_token_cache.json")
 
+# "초당 거래건수를 초과하였습니다" - TR별 초당 호출 제한 초과 시 KIS가 내려주는 코드.
+# 모의투자 계좌는 이 제한이 더 엄격해서, 요청 간 최소 간격을 둬도 종종 발생할 수 있다.
+# 발생 시 예외를 바로 던지지 않고 지수 백오프로 재시도한다.
+_RATE_LIMIT_CODE = "EGW00201"
+
 
 class KISAPIError(RuntimeError):
     pass
@@ -71,6 +76,26 @@ class KISClient:
             time.sleep(wait)
         self._last_request_at = time.time()
 
+    def _send(self, method: str, url: str, *, headers: dict[str, str] | None = None,
+              params: dict[str, Any] | None = None, json_body: dict[str, Any] | None = None,
+              max_retries: int = 5) -> requests.Response:
+        """요청 간 최소 간격을 강제하고, 초당 호출 제한(EGW00201) 발생 시 지수 백오프로 재시도한다."""
+        resp: requests.Response | None = None
+        for attempt in range(max_retries + 1):
+            self._throttle()
+            resp = self._session.request(method, url, headers=headers, params=params,
+                                          json=json_body, timeout=10)
+            if resp.status_code == 200:
+                return resp
+            if _RATE_LIMIT_CODE in resp.text and attempt < max_retries:
+                wait = min(1.5 * (2 ** attempt), 20.0)
+                logger.warning("KIS 초당 호출 제한(EGW00201) 감지, %.1f초 후 재시도 (%d/%d)",
+                               wait, attempt + 1, max_retries)
+                time.sleep(wait)
+                continue
+            raise KISAPIError(f"HTTP {resp.status_code}: {resp.text}")
+        raise KISAPIError(f"재시도 횟수 초과: {resp.text if resp is not None else ''}")
+
     # ------------------------------------------------------------------
     # 인증
     # ------------------------------------------------------------------
@@ -104,17 +129,14 @@ class KISClient:
             return self._access_token  # type: ignore[return-value]
 
         # KIS는 접근토큰 발급 빈도를 제한한다 (분당/일당 제한). 불필요한 재발급을 피할 것.
-        self._throttle()
-        resp = self._session.post(
-            f"{self.base_url}/oauth2/tokenP",
-            json={
+        resp = self._send(
+            "POST", f"{self.base_url}/oauth2/tokenP",
+            json_body={
                 "grant_type": "client_credentials",
                 "appkey": self.app_key,
                 "appsecret": self.app_secret,
             },
-            timeout=10,
         )
-        self._raise_for_status(resp)
         data = resp.json()
         self._access_token = data["access_token"]
         expires_in = int(data.get("expires_in", 86400))
@@ -123,18 +145,15 @@ class KISClient:
         return self._access_token
 
     def _get_hashkey(self, body: dict[str, Any]) -> str:
-        self._throttle()
-        resp = self._session.post(
-            f"{self.base_url}/uapi/hashkey",
+        resp = self._send(
+            "POST", f"{self.base_url}/uapi/hashkey",
             headers={
                 "content-type": "application/json",
                 "appkey": self.app_key,
                 "appsecret": self.app_secret,
             },
-            json=body,
-            timeout=10,
+            json_body=body,
         )
-        self._raise_for_status(resp)
         return resp.json()["HASH"]
 
     def _headers(self, tr_id: str, extra: dict[str, str] | None = None) -> dict[str, str]:
@@ -150,11 +169,6 @@ class KISClient:
             headers.update(extra)
         return headers
 
-    @staticmethod
-    def _raise_for_status(resp: requests.Response) -> None:
-        if resp.status_code != 200:
-            raise KISAPIError(f"HTTP {resp.status_code}: {resp.text}")
-
     def _tr_id(self, real_tr_id: str) -> str:
         return real_tr_id if self.mode == "real" else "V" + real_tr_id[1:]
 
@@ -169,9 +183,8 @@ class KISClient:
         base_date(YYYYMMDD)를 지정하면 해당 날짜를 기준으로 그 이전 데이터를 조회한다
         (과거 데이터 페이지네이션용).
         """
-        self._throttle()
-        resp = self._session.get(
-            f"{self.base_url}/uapi/overseas-price/v1/quotations/dailyprice",
+        resp = self._send(
+            "GET", f"{self.base_url}/uapi/overseas-price/v1/quotations/dailyprice",
             headers=self._headers(TR_DAILY_PRICE),
             params={
                 "AUTH": "",
@@ -181,31 +194,25 @@ class KISClient:
                 "BYMD": base_date,
                 "MODP": "0",
             },
-            timeout=10,
         )
-        self._raise_for_status(resp)
         data = resp.json()
         rows = data.get("output2", [])
         return rows[:count]
 
     def get_current_price(self, symbol: str, exchange: str = "NAS") -> dict[str, Any]:
-        self._throttle()
-        resp = self._session.get(
-            f"{self.base_url}/uapi/overseas-price/v1/quotations/price-detail",
+        resp = self._send(
+            "GET", f"{self.base_url}/uapi/overseas-price/v1/quotations/price-detail",
             headers=self._headers(TR_CURRENT_PRICE),
             params={"AUTH": "", "EXCD": exchange, "SYMB": symbol},
-            timeout=10,
         )
-        self._raise_for_status(resp)
         return resp.json().get("output", {})
 
     # ------------------------------------------------------------------
     # 잔고/주문
     # ------------------------------------------------------------------
     def get_balance(self, exchange: str = "NAS", currency: str = "USD") -> dict[str, Any]:
-        self._throttle()
-        resp = self._session.get(
-            f"{self.base_url}/uapi/overseas-stock/v1/trading/inquire-balance",
+        resp = self._send(
+            "GET", f"{self.base_url}/uapi/overseas-stock/v1/trading/inquire-balance",
             headers=self._headers(self._tr_id(TR_BALANCE_REAL)),
             params={
                 "CANO": self.account_no,
@@ -215,9 +222,7 @@ class KISClient:
                 "CTX_AREA_FK200": "",
                 "CTX_AREA_NK200": "",
             },
-            timeout=10,
         )
-        self._raise_for_status(resp)
         data = resp.json()
         return {"holdings": data.get("output1", []), "summary": data.get("output2", [])}
 
@@ -239,14 +244,11 @@ class KISClient:
             "ORD_DVSN": order_division,
         }
         hashkey = self._get_hashkey(body)
-        self._throttle()
-        resp = self._session.post(
-            f"{self.base_url}/uapi/overseas-stock/v1/trading/order",
+        resp = self._send(
+            "POST", f"{self.base_url}/uapi/overseas-stock/v1/trading/order",
             headers=self._headers(tr_id, extra={"hashkey": hashkey}),
-            json=body,
-            timeout=10,
+            json_body=body,
         )
-        self._raise_for_status(resp)
         result = resp.json()
         if result.get("rt_cd") != "0":
             raise KISAPIError(f"주문 실패: {result}")

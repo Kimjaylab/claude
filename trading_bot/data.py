@@ -72,7 +72,9 @@ def fetch_kis_daily_history(client: KISClient, symbol: str, exchange: str,
 
 
 def _cache_path(cache_dir: str, symbol: str) -> Path:
-    return Path(cache_dir) / f"{symbol}.csv"
+    # 일부 종목코드는 "BRK/B" 처럼 경로 구분자로 오인될 문자를 포함하므로 파일명에 안전하게 치환한다.
+    safe_symbol = symbol.replace("/", "-").replace("\\", "-")
+    return Path(cache_dir) / f"{safe_symbol}.csv"
 
 
 def update_history_cache(client: KISClient, symbol: str, exchange: str, cache_dir: str,
