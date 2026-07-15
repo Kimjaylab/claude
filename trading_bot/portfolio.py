@@ -20,6 +20,7 @@ class Position:
     qty: float
     entry_price: float
     entry_date: str
+    exchange: str = "NAS"
 
     def take_profit_price(self, cfg: RiskConfig) -> float:
         return self.entry_price * (1 + cfg.take_profit_pct)
@@ -59,8 +60,10 @@ class PortfolioState:
     def has_position(self, symbol: str) -> bool:
         return symbol in self.positions
 
-    def open_position(self, symbol: str, qty: float, price: float, date: str) -> None:
-        self.positions[symbol] = Position(symbol=symbol, qty=qty, entry_price=price, entry_date=date)
+    def open_position(self, symbol: str, qty: float, price: float, date: str,
+                       exchange: str = "NAS") -> None:
+        self.positions[symbol] = Position(symbol=symbol, qty=qty, entry_price=price,
+                                           entry_date=date, exchange=exchange)
         self.save()
 
     def close_position(self, symbol: str) -> Position | None:

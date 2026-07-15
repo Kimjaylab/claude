@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import pandas as pd
 
@@ -68,3 +69,45 @@ def fetch_kis_daily_history(client: KISClient, symbol: str, exchange: str,
     df["date"] = pd.to_datetime(df["date"], format="%Y%m%d").dt.strftime("%Y-%m-%d")
     df = df.drop_duplicates(subset="date").sort_values("date").reset_index(drop=True)
     return df
+
+
+def _cache_path(cache_dir: str, symbol: str) -> Path:
+    return Path(cache_dir) / f"{symbol}.csv"
+
+
+def update_history_cache(client: KISClient, symbol: str, exchange: str, cache_dir: str,
+                          full_lookback_days: int = 500, max_rows: int = 800) -> pd.DataFrame:
+    """종목별 로컬 캐시를 증분 갱신한다.
+
+    수백~수천 종목을 매일 스캔할 때 KIS의 초당 호출 제한 때문에 매번 전체 과거 데이터를
+    다시 받으면 시간이 너무 오래 걸린다. 캐시가 있으면 마지막 저장일 이후 데이터만
+    1회 호출로 받아오고, 캐시가 없으면(최초 실행) 전체 lookback을 페이지네이션으로 받는다.
+    """
+    path = _cache_path(cache_dir, symbol)
+    Path(cache_dir).mkdir(parents=True, exist_ok=True)
+
+    if path.exists():
+        cached = pd.read_csv(path, dtype={"date": str})
+        if not cached.empty:
+            new_rows = client.get_daily_price(symbol, exchange=exchange, count=30)
+            if new_rows:
+                new_df = pd.DataFrame(new_rows).rename(columns=_COLUMN_MAP)
+                keep = [c for c in ["date", "open", "high", "low", "close", "volume"] if c in new_df.columns]
+                new_df = new_df[keep]
+                for col in ["open", "high", "low", "close", "volume"]:
+                    if col in new_df.columns:
+                        new_df[col] = pd.to_numeric(new_df[col], errors="coerce")
+                new_df["date"] = pd.to_datetime(new_df["date"], format="%Y%m%d").dt.strftime("%Y-%m-%d")
+                combined = pd.concat([cached, new_df], ignore_index=True)
+            else:
+                combined = cached
+            combined = combined.drop_duplicates(subset="date").sort_values("date").reset_index(drop=True)
+            if len(combined) > max_rows:
+                combined = combined.iloc[-max_rows:].reset_index(drop=True)
+            combined.to_csv(path, index=False)
+            return combined
+
+    combined = fetch_kis_daily_history(client, symbol, exchange, lookback_days=full_lookback_days)
+    if not combined.empty:
+        combined.to_csv(path, index=False)
+    return combined

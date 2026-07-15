@@ -82,10 +82,16 @@ class AppConfig:
     kis: KISConfig = field(default_factory=KISConfig)
     strategy: StrategyConfig = field(default_factory=StrategyConfig)
     risk: RiskConfig = field(default_factory=RiskConfig)
-    watchlist: list[str] = field(
-        default_factory=lambda: _get_list("WATCHLIST", ["AAPL", "MSFT", "NVDA"])
-    )
+
+    # "sp500" (기본, data/sp500_universe.csv 전종목 자동 스크리닝) 또는 "watchlist"
+    universe_source: str = field(default_factory=lambda: os.getenv("UNIVERSE_SOURCE", "sp500").lower())
+    universe_file: str = field(default_factory=lambda: os.getenv("UNIVERSE_FILE", ""))
+    # universe_source=watchlist 일 때만 사용되는 고정 종목 리스트
+    watchlist: list[str] = field(default_factory=lambda: _get_list("WATCHLIST", []))
+    # watchlist 모드에서만 쓰이는 단일 거래소 코드. sp500 유니버스는 종목별 거래소를 CSV에서 읽는다.
     exchange: str = field(default_factory=lambda: os.getenv("EXCHANGE", "NAS"))
+
+    history_cache_dir: str = os.getenv("HISTORY_CACHE_DIR", "data_cache")
     poll_interval_sec: int = int(os.getenv("POLL_INTERVAL_SEC", "300"))
     state_file: str = os.getenv("STATE_FILE", "trading_bot_state.json")
     # 실전투자 안전장치: 명시적으로 "yes" 로 설정해야 실거래 주문 전송

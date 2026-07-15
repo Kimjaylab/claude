@@ -42,8 +42,29 @@ python -m trading_bot.main backtest --csv-dir ./data --output trades.csv
 
 ```bash
 python -m trading_bot.main trade          # 무한 루프 (기본 5분 주기)
-python -m trading_bot.main trade --once    # 1회만 실행 (cron 등에서 사용)
+python -m trading_bot.main trade --once    # 1회만 실행 (cron/작업 스케줄러 등에서 사용)
 ```
+
+## 자동 스크리닝 대상 (유니버스)
+
+기본값은 고정 관심종목이 아니라 **S&P 500 전종목(503개, `trading_bot/data/sp500_universe.csv`)을
+매일 자동으로 스캔**하는 방식입니다 (`UNIVERSE_SOURCE=sp500`). Nasdaq-100은 대부분 S&P 500과
+겹치므로 별도 목록을 추가하지 않았습니다.
+
+- **왜 매시간이 아니라 하루 1회 스캔인가**: KIS API는 TR(기능)별로 초당 호출 횟수를 제한합니다.
+  503개 종목을 매번 전체 과거시세부터 다시 받으면 시간이 너무 오래 걸리고 제한에 걸립니다.
+  그래서 종목별 과거시세를 `data_cache/` 폴더에 로컬로 캐시해두고, 최초 1회만 전체를 받고
+  이후에는 매일 최신 데이터만 1건씩 추가 조회합니다. 이 방식으로 최초 실행(콜드스타트)은
+  종목당 여러 번 호출이 필요해 다소 오래 걸릴 수 있지만(수십 분 수준), 이후 매일 스캔은
+  종목당 1회 호출(약 500회, 대략 10분 내외)로 끝납니다.
+- **보유 포지션의 익절(+5%)/손절(-5%) 점검은 실행할 때마다(기본 5분~1시간 주기) 수행**되므로
+  실시간성은 유지됩니다. 늦어지는 건 "신규 진입 신호 스캔"뿐입니다.
+- 고정된 소수 종목만 감시하고 싶다면 `.env`에서 `UNIVERSE_SOURCE=watchlist`로 바꾸고
+  `WATCHLIST`, `EXCHANGE`를 설정하세요.
+- `data/sp500_universe.csv`의 symbol→exchange(NAS/NYS) 매핑은 공개 데이터셋으로 자동
+  생성한 것이라 소수 종목은 거래소 코드가 틀릴 수 있습니다. 틀린 종목은 API 호출이
+  실패하면서 로그에 남고 자동으로 스킵되니(전체 실행이 멈추지 않음), 발견하면
+  CSV를 직접 수정하면 됩니다.
 
 ## 실전투자로 전환하기 전 체크리스트
 
@@ -69,12 +90,15 @@ python -m trading_bot.main trade --once    # 1회만 실행 (cron 등에서 사�
 
 ```
 trading_bot/
-  config.py      - .env 기반 설정 (KIS 인증, 전략 파라미터, 리스크 규칙)
-  kis_client.py  - KIS REST API 클라이언트 (토큰, 시세, 주문, 잔고)
+  config.py      - .env 기반 설정 (KIS 인증, 전략 파라미터, 리스크 규칙, 유니버스)
+  kis_client.py  - KIS REST API 클라이언트 (토큰, 시세, 주문, 잔고, 요청 쓰로틀)
   indicators.py  - 이동평균/볼린저밴드/거래량평균
   strategy.py    - 역매공파 신호 생성 로직
   portfolio.py   - 보유 포지션 상태 저장 및 익절/손절 판단
-  data.py        - 과거 시세 로딩 (CSV / KIS API)
+  universe.py    - 자동 스크리닝 대상 종목 로딩 (기본: S&P 500)
+  data.py        - 과거 시세 로딩/로컬 캐시 (CSV / KIS API)
+  data/sp500_universe.csv - S&P 500 종목-거래소 매핑 (자동 생성, 필요시 수정)
+  data_cache/    - 종목별 과거시세 로컬 캐시 (실행 시 자동 생성, git에는 포함 안 됨)
   backtest.py    - 백테스트 엔진
   live.py        - 실시간(모의/실전) 매매 루프
   main.py        - CLI
