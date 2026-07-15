@@ -3,3 +3,10 @@ dist/
 __pycache__/
 *.pyc
 *.pyo
+
+# trading_bot
+.env
+.kis_token_cache.json
+trading_bot_state.json
+trading_bot/data_cache/
+*.egg-info/
