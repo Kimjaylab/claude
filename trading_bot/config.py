@@ -33,6 +33,8 @@ class KISConfig:
     )
     # "paper" (모의투자) 또는 "real" (실전투자)
     mode: str = field(default_factory=lambda: os.getenv("KIS_MODE", "paper").lower())
+    # TR별 초당 호출 제한(EGW00201 방지)에 대응하는 최소 요청 간격(초)
+    request_interval_sec: float = float(os.getenv("KIS_REQUEST_INTERVAL_SEC", "1.05"))
 
 
 @dataclass

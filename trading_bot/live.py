@@ -29,6 +29,7 @@ class LiveTrader:
             account_no=cfg.kis.account_no,
             account_product_cd=cfg.kis.account_product_cd,
             mode=cfg.kis.mode,
+            request_interval_sec=cfg.kis.request_interval_sec,
         )
         self.portfolio = PortfolioState(cfg.state_file)
         self._last_signal_check_date: str | None = None

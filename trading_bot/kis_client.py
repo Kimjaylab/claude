@@ -46,7 +46,8 @@ class Position:
 
 class KISClient:
     def __init__(self, app_key: str, app_secret: str, account_no: str,
-                 account_product_cd: str = "01", mode: str = "paper"):
+                 account_product_cd: str = "01", mode: str = "paper",
+                 request_interval_sec: float = 1.05):
         if not app_key or not app_secret or not account_no:
             raise ValueError("KIS_APP_KEY / KIS_APP_SECRET / KIS_ACCOUNT_NO가 설정되어야 합니다.")
         self.app_key = app_key
@@ -58,6 +59,17 @@ class KISClient:
         self._access_token: str | None = None
         self._token_expires_at: float = 0.0
         self._session = requests.Session()
+        # KIS는 TR별로 초당 호출 횟수를 제한한다(모의투자가 더 엄격함, EGW00201 오류로 거절됨).
+        # 매 API 호출 전에 최소 간격을 강제해 "초당 거래건수를 초과하였습니다" 오류를 방지한다.
+        self._request_interval_sec = request_interval_sec
+        self._last_request_at = 0.0
+
+    def _throttle(self) -> None:
+        elapsed = time.time() - self._last_request_at
+        wait = self._request_interval_sec - elapsed
+        if wait > 0:
+            time.sleep(wait)
+        self._last_request_at = time.time()
 
     # ------------------------------------------------------------------
     # 인증
@@ -92,6 +104,7 @@ class KISClient:
             return self._access_token  # type: ignore[return-value]
 
         # KIS는 접근토큰 발급 빈도를 제한한다 (분당/일당 제한). 불필요한 재발급을 피할 것.
+        self._throttle()
         resp = self._session.post(
             f"{self.base_url}/oauth2/tokenP",
             json={
@@ -110,6 +123,7 @@ class KISClient:
         return self._access_token
 
     def _get_hashkey(self, body: dict[str, Any]) -> str:
+        self._throttle()
         resp = self._session.post(
             f"{self.base_url}/uapi/hashkey",
             headers={
@@ -155,6 +169,7 @@ class KISClient:
         base_date(YYYYMMDD)를 지정하면 해당 날짜를 기준으로 그 이전 데이터를 조회한다
         (과거 데이터 페이지네이션용).
         """
+        self._throttle()
         resp = self._session.get(
             f"{self.base_url}/uapi/overseas-price/v1/quotations/dailyprice",
             headers=self._headers(TR_DAILY_PRICE),
@@ -174,6 +189,7 @@ class KISClient:
         return rows[:count]
 
     def get_current_price(self, symbol: str, exchange: str = "NAS") -> dict[str, Any]:
+        self._throttle()
         resp = self._session.get(
             f"{self.base_url}/uapi/overseas-price/v1/quotations/price-detail",
             headers=self._headers(TR_CURRENT_PRICE),
@@ -187,6 +203,7 @@ class KISClient:
     # 잔고/주문
     # ------------------------------------------------------------------
     def get_balance(self, exchange: str = "NAS", currency: str = "USD") -> dict[str, Any]:
+        self._throttle()
         resp = self._session.get(
             f"{self.base_url}/uapi/overseas-stock/v1/trading/inquire-balance",
             headers=self._headers(self._tr_id(TR_BALANCE_REAL)),
@@ -222,6 +239,7 @@ class KISClient:
             "ORD_DVSN": order_division,
         }
         hashkey = self._get_hashkey(body)
+        self._throttle()
         resp = self._session.post(
             f"{self.base_url}/uapi/overseas-stock/v1/trading/order",
             headers=self._headers(tr_id, extra={"hashkey": hashkey}),
