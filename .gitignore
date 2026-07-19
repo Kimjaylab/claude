@@ -3,3 +3,6 @@ dist/
 __pycache__/
 *.pyc
 *.pyo
+
+# ai_trading_system secrets
+ai_trading_system/.env
