@@ -51,3 +51,8 @@ RISK_PER_TRADE_PCT = 0.01  # fraction of equity risked (SL distance) per trade
 
 # --- Loop timing ---------------------------------------------------------------
 SCAN_INTERVAL_SECONDS = 300
+
+# --- Persistence -------------------------------------------------------------------
+# Survives process restarts so a crash mid-lockout can't quietly re-arm the
+# daily loss circuit breaker with a fresh baseline.
+RISK_STATE_FILE = os.getenv("RISK_STATE_FILE", "state/risk_state.json")

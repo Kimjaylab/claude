@@ -32,7 +32,14 @@ class LiveTrader:
         self.trend_active: set[str] = set()
 
         equity = self.client.fetch_equity()
-        self.risk_manager.start_new_day(equity)
+        restored = self.risk_manager.load()
+        if restored:
+            log.info(
+                "Restored risk state from disk: day_start_equity=%s locked_until=%s",
+                self.risk_manager.day_start_equity, self.risk_manager.locked_until,
+            )
+        else:
+            self.risk_manager.start_new_day(equity)
         log.info("Started in mode=%s equity=%.2f", self.client.mode, equity)
 
     def _flatten_everything(self):

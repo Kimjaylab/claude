@@ -4,5 +4,6 @@ __pycache__/
 *.pyc
 *.pyo
 
-# ai_trading_system secrets
+# ai_trading_system secrets and runtime state
 ai_trading_system/.env
+ai_trading_system/state/

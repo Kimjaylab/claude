@@ -1,0 +1,30 @@
+# Systemd unit for running without Docker.
+#
+# Install:
+#   sudo cp deploy/trading-bot.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now trading-bot
+#
+# Adjust User, WorkingDirectory and the venv path in ExecStart to match
+# your server before installing.
+
+[Unit]
+Description=AI Trading System (ai_trading_system)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=trading-bot
+WorkingDirectory=/opt/ai_trading_system
+EnvironmentFile=/opt/ai_trading_system/.env
+ExecStart=/opt/ai_trading_system/venv/bin/python main.py run
+Restart=on-failure
+RestartSec=15
+# Crash-loop protection: if it fails 5 times in 10 minutes, stop retrying
+# instead of hammering the exchange with repeated re-auth/order attempts.
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Install]
+WantedBy=multi-user.target

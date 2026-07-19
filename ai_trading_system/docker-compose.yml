@@ -1,0 +1,12 @@
+services:
+  trading-bot:
+    build: .
+    env_file: .env
+    restart: unless-stopped
+    volumes:
+      - ./state:/app/state
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"

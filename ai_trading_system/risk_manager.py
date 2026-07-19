@@ -4,9 +4,17 @@ daily loss circuit breaker that locks the system out for 24h.
 This module never talks to the exchange directly -- it only makes
 decisions. The caller (live_trader.py / backtester.py) is responsible for
 actually closing positions and cancelling orders when told to.
+
+For unattended 24/7 operation, the daily-loss lockout state is persisted
+to disk (see save()/load()) so that a crash-and-restart (systemd, Docker,
+a VPS reboot) can't silently reset a lockout that was protecting the
+account -- otherwise a process that keeps crashing after the -3% limit is
+hit would just keep re-arming itself with a fresh baseline every restart.
 """
-from dataclasses import dataclass, field
+import json
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import config
 
@@ -35,6 +43,7 @@ class RiskManager:
         now = now or datetime.now(timezone.utc)
         self.day_start_equity = equity
         self.day_start_at = now
+        self.save()
 
     def _maybe_roll_day(self, now: datetime):
         if self.day_start_at is None:
@@ -43,6 +52,7 @@ class RiskManager:
             # A full day passed without hitting the limit; roll the baseline
             # forward so a slow multi-day drawdown doesn't false-trigger.
             self.day_start_at = now
+            self.save()
 
     def is_locked(self, now: datetime | None = None) -> bool:
         now = now or datetime.now(timezone.utc)
@@ -51,6 +61,7 @@ class RiskManager:
         if now >= self.locked_until:
             self.locked_until = None
             self.lock_reason = ""
+            self.save()
             return False
         return True
 
@@ -73,6 +84,7 @@ class RiskManager:
                 f"(limit -{self.daily_loss_limit_pct * 100:.0f}%). "
                 f"Locked until {self.locked_until.isoformat()}."
             )
+            self.save()
             return True
         return False
 
@@ -100,3 +112,34 @@ class RiskManager:
         if side == "short":
             return entry_price - tp_distance
         raise ValueError(f"side must be 'long' or 'short', got {side!r}")
+
+    # --- persistence (survive process restarts) --------------------------------------
+    def save(self, path: str | None = None):
+        path = path or config.RISK_STATE_FILE
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        state = {
+            "day_start_equity": self.day_start_equity,
+            "day_start_at": self.day_start_at.isoformat() if self.day_start_at else None,
+            "locked_until": self.locked_until.isoformat() if self.locked_until else None,
+            "lock_reason": self.lock_reason,
+        }
+        Path(path).write_text(json.dumps(state))
+
+    def load(self, path: str | None = None) -> bool:
+        """Restore previously saved state in-place. Returns True if a state
+        file was found and loaded, False if there was nothing to restore.
+        """
+        path = path or config.RISK_STATE_FILE
+        p = Path(path)
+        if not p.exists():
+            return False
+        state = json.loads(p.read_text())
+        self.day_start_equity = state.get("day_start_equity")
+        self.day_start_at = (
+            datetime.fromisoformat(state["day_start_at"]) if state.get("day_start_at") else None
+        )
+        self.locked_until = (
+            datetime.fromisoformat(state["locked_until"]) if state.get("locked_until") else None
+        )
+        self.lock_reason = state.get("lock_reason", "")
+        return True
