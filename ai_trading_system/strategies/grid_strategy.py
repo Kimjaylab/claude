@@ -37,7 +37,11 @@ class GridStrategy:
         step = (self.box_high - self.box_low) / config.GRID_LEVELS
         self.levels = [self.box_low + step * i for i in range(config.GRID_LEVELS + 1)]
 
-        notional_per_level = (equity * risk_manager.leverage) / config.GRID_LEVELS
+        # Divide by len(self.levels), not GRID_LEVELS -- there are
+        # GRID_LEVELS + 1 price points, so dividing by GRID_LEVELS would
+        # let the worst case (every level filled at once) run ~10% over
+        # the intended equity * leverage budget for this symbol.
+        notional_per_level = (equity * risk_manager.leverage) / len(self.levels)
         last_price = client.fetch_last_price(self.symbol)
         self.order_amount = notional_per_level / last_price
 

@@ -88,15 +88,30 @@ class LiveTrader:
             if not has_open:
                 self.trend_active.discard(symbol)
 
+        # Each concurrently-open symbol only gets an equal slice of total
+        # equity to size against, so account-wide leverage stays bounded at
+        # LEVERAGE * equity no matter how many symbols the scanner flags in
+        # the same cycle. Without this, N simultaneous grids/positions would
+        # each be sized off the FULL equity, stacking to ~N * LEVERAGE.
+        per_symbol_budget = equity / config.MAX_CONCURRENT_POSITIONS
+
         for reading in readings:
             symbol = reading.symbol
             if symbol in self.grids or symbol in self.trend_active:
                 continue
 
+            active_count = len(self.grids) + len(self.trend_active)
+            if active_count >= config.MAX_CONCURRENT_POSITIONS:
+                log.info(
+                    "Max concurrent positions (%d) reached, skipping %s this cycle.",
+                    config.MAX_CONCURRENT_POSITIONS, symbol,
+                )
+                break
+
             if reading.regime == "ranging":
                 grid = GridStrategy(symbol)
                 try:
-                    grid.setup(self.client, self.risk_manager, equity)
+                    grid.setup(self.client, self.risk_manager, per_symbol_budget)
                 except Exception:
                     log.exception("Failed to set up grid for %s", symbol)
                     continue
@@ -110,7 +125,7 @@ class LiveTrader:
                     log.exception("Failed to evaluate trend signal for %s", symbol)
                     continue
                 if signal:
-                    qty = trend_strategy.execute(self.client, self.risk_manager, equity, signal)
+                    qty = trend_strategy.execute(self.client, self.risk_manager, per_symbol_budget, signal)
                     if qty:
                         self.trend_active.add(symbol)
                         log.info(

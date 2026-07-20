@@ -49,6 +49,13 @@ DAILY_LOSS_LIMIT_PCT = 0.03  # -3% of start-of-day equity halts trading
 LOCKOUT_HOURS = 24
 RISK_PER_TRADE_PCT = 0.01  # fraction of equity risked (SL distance) per trade
 
+# Caps how many symbols can have capital deployed at the same time. Each
+# concurrent slot gets equity / MAX_CONCURRENT_POSITIONS as its sizing
+# budget, so the sum across every open grid + trend position stays bounded
+# by LEVERAGE * equity account-wide -- not LEVERAGE * equity *per symbol*,
+# which is what "5x leverage" is supposed to mean.
+MAX_CONCURRENT_POSITIONS = 5
+
 # --- Loop timing ---------------------------------------------------------------
 SCAN_INTERVAL_SECONDS = 300
 
