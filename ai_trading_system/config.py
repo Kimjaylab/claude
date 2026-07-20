@@ -21,6 +21,11 @@ LIVE_CONFIRMATION_PHRASE = "I_UNDERSTAND_THE_RISK"
 # --- Market scanner ---------------------------------------------------------------
 TOP_N_SYMBOLS = 30
 QUOTE_ASSET = "USDT"
+# Fallback safety net for tokenized-stock/commodity USDT perpetuals that
+# Binance may list without a usable `underlyingType` field in the market
+# metadata. Extend this if new non-crypto tickers show up in the scan logs
+# ("Excluded N non-crypto USDT perpetual(s)...").
+NON_CRYPTO_BASE_DENYLIST = {"XAU", "XAG", "MU"}
 ADX_PERIOD = 14
 ADX_TRENDING_THRESHOLD = 25
 BB_PERIOD = 20

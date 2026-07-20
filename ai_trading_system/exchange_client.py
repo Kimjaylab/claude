@@ -21,6 +21,7 @@ testnet or live account -- validate on testnet before ever using "live".
 """
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass, field
 
@@ -171,13 +172,36 @@ class ExchangeClient:
 
     # --- market data (works in every mode, uses public endpoints) -------------------
     def fetch_top_symbols(self, n: int = config.TOP_N_SYMBOLS) -> list[str]:
+        """Top-N USDT-margined perpetuals by 24h quote volume, restricted to
+        actual cryptocurrencies. Binance's USDS-M futures now also lists
+        tokenized-stock and commodity perpetuals (e.g. gold/silver, single
+        stocks) under the same USDT-quoted swap markets; those are excluded
+        here since the strategies/risk model in this repo were built for
+        crypto volatility, not equities or metals.
+        """
         markets = self.exchange.load_markets()
         tickers = self.exchange.fetch_tickers()
-        usdt_perp = [
-            m["symbol"]
-            for m in markets.values()
-            if m.get("swap") and m.get("quote") == config.QUOTE_ASSET and m.get("active")
-        ]
+
+        usdt_perp = []
+        excluded = []
+        for m in markets.values():
+            if not (m.get("swap") and m.get("quote") == config.QUOTE_ASSET and m.get("active")):
+                continue
+            underlying_type = (m.get("info") or {}).get("underlyingType")
+            if underlying_type and underlying_type != "COIN":
+                excluded.append(m["symbol"])
+                continue
+            if m.get("base") in config.NON_CRYPTO_BASE_DENYLIST:
+                excluded.append(m["symbol"])
+                continue
+            usdt_perp.append(m["symbol"])
+
+        if excluded:
+            logging.getLogger("exchange_client").info(
+                "Excluded %d non-crypto USDT perpetual(s) from the scan: %s",
+                len(excluded), ", ".join(sorted(excluded)),
+            )
+
         ranked = sorted(
             usdt_perp,
             key=lambda s: tickers.get(s, {}).get("quoteVolume") or 0,
