@@ -49,6 +49,30 @@ class LiveTrader:
         self.grids.clear()
         self.trend_active.clear()
 
+    def _process_dry_run_fills(self):
+        """dry_run mode never talks to a real exchange, so nothing else
+        fills the resting limit/stop/take-profit orders sitting in
+        DryRunBroker.open_orders. Without this, grid limit orders and
+        trend stop-loss/take-profit orders would just sit there forever.
+        Uses the latest traded price as a stand-in for the bar's high/low,
+        so a level can be missed if price wicks through and back between
+        polling cycles -- fine for watching the strategy logic behave
+        sensibly, not a substitute for testnet/live fills.
+        """
+        if self.client.mode != "dry_run":
+            return
+        broker = self.client.dry_run_broker
+        active_symbols = set(self.grids) | set(self.trend_active)
+        for symbol in active_symbols:
+            if not broker.open_orders.get(symbol):
+                continue
+            last_price = self.client.fetch_last_price(symbol)
+            balance_before = broker.balance_usdt
+            broker.check_fills(symbol, last_price, high=last_price, low=last_price)
+            pnl = broker.balance_usdt - balance_before
+            if pnl != 0:
+                log.info("%s dry-run fill, realized pnl=%+.4f", symbol, pnl)
+
     def run_once(self):
         now = datetime.now(timezone.utc)
         equity = self.client.fetch_equity()
@@ -61,6 +85,8 @@ class LiveTrader:
         if self.risk_manager.is_locked(now):
             log.info("Locked out until %s, skipping cycle.", self.risk_manager.locked_until)
             return
+
+        self._process_dry_run_fills()
 
         readings = regime_scanner.scan_market(self.client, config.TOP_N_SYMBOLS)
         readings_by_symbol = {r.symbol: r for r in readings}
@@ -133,6 +159,15 @@ class LiveTrader:
                             symbol, signal.side, signal.entry_price,
                             signal.stop_price, signal.take_profit_price, qty,
                         )
+
+        equity_now = self.client.fetch_equity()
+        day_start = self.risk_manager.day_start_equity or equity_now
+        day_pnl = equity_now - day_start
+        day_pnl_pct = (day_pnl / day_start * 100) if day_start else 0.0
+        log.info(
+            "Cycle summary: equity=%.2f day_pnl=%+.2f (%+.2f%%) open_grids=%d open_trend=%d",
+            equity_now, day_pnl, day_pnl_pct, len(self.grids), len(self.trend_active),
+        )
 
     def run_forever(self):
         while True:
